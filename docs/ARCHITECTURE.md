@@ -169,6 +169,18 @@ Training data is JSONL of `{state, questions, labels}` (see `reflex/train/data.p
 labelled routing / moderation / scoring dataset plugs in the same way. `--permutations N`
 shuffles option order as augmentation, which also attacks letter-position bias.
 
+## Browser version (`docs/`)
+
+`docs/index.html` + `docs/app.js` + `docs/reflex.js` run the same design on
+[transformers.js](https://github.com/huggingface/transformers.js) with WebGPU and
+`onnx-community/Qwen3.5-0.8B-ONNX-OPT` (q4 decoder, fp16 vision encoder, ~650 MB).
+`reflex.js` mirrors `prompt.py` + `readout.py`: same ChatML prefix, same option labels,
+same restricted-softmax readout via a single `model.forward` (no `generate`). Differences
+from the Python engine: one forward per question (no branch packing or cache sharing, the
+ONNX graph builds its own causal mask), one image per request, no calibration file (a
+temperature slider instead). Served by GitHub Pages from `docs/`; the model weights are
+fetched from the Hugging Face hub and cached by the browser.
+
 ## Request extensions
 
 * `permutations: N` (1–8): average a choice/score readout over N shuffled option orders.

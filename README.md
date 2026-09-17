@@ -23,6 +23,15 @@ question   refund requested?  ->  yes 2%
 That whole answer comes back in about 100 ms once the state is cached. Your code then
 decides what to do with the numbers ("auto-route if above 90 %, otherwise ask a human").
 
+## Try it in your browser first
+
+**https://kshetrajna12.github.io/reflex/** runs the whole thing on your own GPU through
+WebGPU (Chrome, Edge, or Safari 18+) with a 650 MB Qwen3.5-0.8B model. Pick a preset,
+load the model once, drop in a photo, press Run. Nothing is uploaded anywhere. It is the
+same request format and the same readout as the Python version below, just smaller and
+less calibrated. The page lives in [`docs/`](docs/): `reflex.js` is the inference module,
+`app.js` the UI.
+
 ## Why would I want this?
 
 Large chat models are great at reasoning but slow and expensive when all you need is a
@@ -165,6 +174,9 @@ write-ups are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 - Works with Qwen3.5 (default, handles images), Qwen3, and Qwen3-VL checkpoints. Any
   size that fits your GPU; `--model Qwen/Qwen3.5-0.8B` runs on very small cards.
+- The browser demo answers one question per forward pass (about 300 tokens each with an
+  image) and does not share the state cache between questions, so it is fine for a
+  handful of questions, not hundreds.
 - A `choice` question can have up to 26 options; `score` can have 2 to 10 levels.
 - The model is not magic: check its answers on a handful of your own examples before
   trusting it, and use the confidence numbers to route uncertain cases to a person.

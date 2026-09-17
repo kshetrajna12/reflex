@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reflex · decisions, with probabilities, in your browser</title>
+<meta name="description" content="A tiny System One decision model running on WebGPU. State + typed questions in, calibrated probabilities out. Nothing leaves your machine.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f6f3ee; --bg2: #efe9e0; --fg: #1c1a17; --muted: #6f685e; --faint: #a39b8f;
+    --card: #fffdf9; --line: #e6dfd3; --line2: #d8cfc0;
+    --acc: #b4532a; --acc2: #d9773f; --best: #2f7a4f; --best2: #57a877;
+    --shadow: 0 1px 2px rgba(40,30,10,.05), 0 12px 32px -16px rgba(40,30,10,.18);
+    --serif: "Fraunces", Georgia, "Times New Roman", serif;
+    --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141310; --bg2: #1c1a16; --fg: #ece7de; --muted: #a59d90; --faint: #6e685e;
+      --card: #1e1c18; --line: #2c2924; --line2: #3a352d;
+      --acc: #e08a5a; --acc2: #f0a877; --best: #5fbf88; --best2: #86d9a8;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 16px 40px -20px rgba(0,0,0,.7);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; color: var(--fg); font: 15.5px/1.55 var(--sans);
+    background: radial-gradient(1200px 600px at 10% -10%, var(--bg2), transparent 60%),
+                radial-gradient(900px 500px at 100% 0%, rgba(180,83,42,.07), transparent 55%), var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 1120px; margin: 0 auto; padding: 40px 20px 80px; }
+  a { color: var(--acc); text-decoration: none; border-bottom: 1px solid transparent; } a:hover { border-bottom-color: var(--acc); }
+  code { font-family: var(--mono); font-size: .9em; background: var(--bg2); padding: 1px 5px; border-radius: 4px; }
+
+  /* hero */
+  header { display: grid; grid-template-columns: 1.2fr .8fr; gap: 32px; align-items: end; margin-bottom: 36px; }
+  @media (max-width: 860px) { header { grid-template-columns: 1fr; } }
+  .eyebrow { font: 500 12px/1 var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--acc); margin-bottom: 14px; }
+  h1 { font: 300 clamp(38px, 6vw, 64px)/1.02 var(--serif); letter-spacing: -.02em; margin: 0 0 16px; font-variation-settings: "opsz" 144; }
+  h1 em { font-style: italic; font-weight: 500; color: var(--acc); }
+  .lead { font-size: 17px; color: var(--muted); margin: 0; max-width: 560px; }
+  .steps { display: grid; gap: 10px; }
+  .step { display: grid; grid-template-columns: 28px 1fr; gap: 12px; align-items: start; font-size: 14px; color: var(--muted); }
+  .step b { color: var(--fg); font-weight: 600; }
+  .step .n { width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line2); display: grid; place-items: center; font: 500 12px var(--mono); color: var(--acc); }
+
+  /* controls */
+  .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+  select { font: 500 14px var(--sans); color: var(--fg); background: var(--card); border: 1px solid var(--line2); border-radius: 999px; padding: 9px 36px 9px 14px; appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 18px) 55%, calc(100% - 13px) 55%; background-size: 5px 5px; background-repeat: no-repeat; }
+  button { font: 600 14px var(--sans); border: 0; border-radius: 999px; padding: 10px 20px; cursor: pointer; transition: transform .08s, box-shadow .2s, opacity .2s; }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: .45; cursor: default; transform: none; }
+  .primary { background: linear-gradient(135deg, var(--acc), var(--acc2)); color: #fff; box-shadow: 0 6px 18px -8px var(--acc); }
+  .primary:not(:disabled):hover { box-shadow: 0 10px 24px -10px var(--acc); }
+  .secondary { background: transparent; color: var(--fg); border: 1px solid var(--line2); }
+  .secondary:not(:disabled):hover { border-color: var(--acc); color: var(--acc); }
+  .temp { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin-left: auto; }
+  .temp output { font-family: var(--mono); color: var(--fg); min-width: 2.4em; }
+  input[type=range] { accent-color: var(--acc); width: 140px; }
+
+  .statusline { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13.5px; min-height: 22px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+  .dot.busy { background: var(--acc); animation: pulse 1.1s ease-in-out infinite; } .dot.ready { background: var(--best); }
+  @keyframes pulse { 0%,100% { transform: scale(1); opacity: 1 } 50% { transform: scale(.6); opacity: .5 } }
+  .barwrap { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; margin: 8px 0 22px; }
+  #bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--acc), var(--acc2)); transition: width .25s ease; }
+
+  /* cards */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; } @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px 18px 16px; box-shadow: var(--shadow); }
+  label, .cardtitle { display: block; font: 500 11.5px/1 var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  textarea { width: 100%; min-height: 230px; font: 13px/1.5 var(--mono); color: var(--fg); background: var(--bg2); border: 1px solid transparent; border-radius: 10px; padding: 12px; resize: vertical; transition: border-color .15s, background .15s; }
+  textarea:focus { outline: none; border-color: var(--acc); background: var(--card); }
+  .filerow { display: flex; gap: 12px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+  .filebtn { font: 500 13px var(--sans); color: var(--fg); border: 1px dashed var(--line2); border-radius: 10px; padding: 9px 14px; cursor: pointer; background: transparent; }
+  .filebtn:hover { border-color: var(--acc); color: var(--acc); }
+  input[type=file] { display: none; }
+  #preview { max-height: 160px; max-width: 100%; border-radius: 10px; border: 1px solid var(--line); box-shadow: var(--shadow); }
+  .hint { color: var(--muted); font-size: 13px; margin: 12px 0 0; }
+
+  /* answers */
+  .answers { margin-top: 18px; }
+  .answer { display: grid; grid-template-columns: 220px 1fr; gap: 18px; padding: 18px 0; border-top: 1px solid var(--line); animation: rise .35s ease both; }
+  .answer:first-child { border-top: 0; padding-top: 4px; }
+  @media (max-width: 640px) { .answer { grid-template-columns: 1fr; gap: 8px; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+  .answer h3 { margin: 0; font: 500 22px/1.15 var(--serif); letter-spacing: -.01em; }
+  .answer .kind { display: inline-block; margin-top: 8px; font: 500 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--acc); border: 1px solid var(--line2); border-radius: 999px; padding: 5px 9px; }
+  .answer .verdict { margin-top: 12px; font-size: 14px; color: var(--muted); } .answer .verdict b { color: var(--fg); font-weight: 600; }
+  .row { display: grid; grid-template-columns: minmax(110px, 1.3fr) 3fr 64px; gap: 12px; align-items: center; font-size: 14px; margin: 6px 0; }
+  .row .lab { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .row.best .lab { color: var(--fg); font-weight: 600; }
+  .track { height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; }
+  .fill { display: block; height: 100%; width: 0; border-radius: 999px; background: linear-gradient(90deg, var(--faint), var(--muted)); transition: width .7s cubic-bezier(.2,.8,.2,1); }
+  .row.best .fill { background: linear-gradient(90deg, var(--best), var(--best2)); }
+  .pct { text-align: right; font: 500 13px var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); } .row.best .pct { color: var(--best); }
+  .meta { color: var(--muted); font-size: 13px; }
+  .usage { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); font: 12.5px var(--mono); color: var(--muted); }
+  .empty { color: var(--faint); font: italic 15px var(--serif); padding: 8px 0 4px; }
+  .warn { background: rgba(217,119,63,.1); border: 1px solid rgba(217,119,63,.35); color: var(--fg); border-radius: 12px; padding: 10px 14px; font-size: 14px; margin: 0 0 16px; }
+  footer { margin-top: 44px; color: var(--muted); font-size: 13.5px; max-width: 760px; }
+  footer p { margin: 6px 0; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <div class="eyebrow">reflex · a System One model in your browser</div>
+      <h1>Ask a picture, or a paragraph, <em>and get odds back.</em></h1>
+      <p class="lead">Give it some <b>state</b> and a few questions with fixed answers. It answers every question in one pass and says how sure it is about each option. The model runs on your own GPU through WebGPU; nothing is uploaded anywhere.</p>
+    </div>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><span><b>Pick a preset</b> or write your own state and questions.</span></div>
+      <div class="step"><span class="n">2</span><span><b>Load the model</b> once (Qwen3.5-0.8B, about 650 MB, cached by your browser).</span></div>
+      <div class="step"><span class="n">3</span><span><b>Run.</b> Each answer is a probability distribution, not a sentence.</span></div>
+    </div>
+  </header>
+
+  <div id="gpu-warning" class="warn" hidden>No WebGPU in this browser (try Chrome, Edge, or Safari 18+). Falling back to CPU/WebAssembly, which is much slower.</div>
+
+  <div class="toolbar">
+    <select id="preset" aria-label="preset"></select>
+    <button id="load" class="secondary">Load model</button>
+    <button id="run" class="primary" disabled>Run</button>
+    <span class="temp"><span>temperature</span><input id="temp" type="range" min="0.5" max="4" step="0.1" value="1.0"><output id="temp-val">1.0</output></span>
+  </div>
+  <div class="statusline"><span class="dot" id="dot"></span><span id="status">Model not loaded.</span></div>
+  <div class="barwrap"><div id="bar"></div></div>
+
+  <div class="grid">
+    <section class="card">
+      <label for="state">State</label>
+      <textarea id="state" spellcheck="false"></textarea>
+      <div class="filerow">
+        <label class="filebtn" for="file" style="margin:0">Choose an image…</label>
+        <input id="file" type="file" accept="image/*">
+        <img id="preview" hidden alt="picked image">
+      </div>
+      <p class="hint">An image replaces the <code>{"type":"image"}</code> entry in the state. Everything else is plain text or JSON.</p>
+    </section>
+    <section class="card">
+      <label for="questions">Questions</label>
+      <textarea id="questions" spellcheck="false"></textarea>
+      <p class="hint"><code>noul</code> asks yes/no · <code>choice</code> picks one of up to 26 · <code>score</code> rates on 2–10 ordered levels. Same JSON as the Python server.</p>
+    </section>
+  </div>
+
+  <section class="card answers">
+    <span class="cardtitle">Answers</span>
+    <div id="answers"><div class="empty">Nothing yet. Load the model and press Run.</div></div>
+    <div class="usage" id="usage" hidden></div>
+  </section>
+
+  <footer>
+    <p>The percentages from a raw 0.8B model are only roughly honest. Nudge <i>temperature</i> above 1 to soften over-confident answers; the Python package can fit this from labelled data and gets within noise of TypeSafe's Jev on MMLU with a 4B model.</p>
+    <p><a href="https://github.com/kshetrajna12/reflex">Source, the full-size Python server, and how it works</a> · an open re-creation of TypeSafe's Jev · MIT.</p>
+  </footer>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
