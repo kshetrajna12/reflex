@@ -3,6 +3,8 @@ name = "reflex"
 version = "0.1.0"
 description = "A System One decision model (Jev-style) built on a pretrained Qwen: shared-state prefill, isolated question branches, direct probability readout."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Kshetrajna Raghavan", email = "kshetrajna@gmail.com" }
 ]

@@ -176,3 +176,8 @@ Built after reading TypeSafe's [Jev announcement](https://typesafe.ai/blog/intro
 and [docs](https://docs.typesafe.ai/), and Archer Hume's
 [Jev's architecture, unmasked](https://archerhume.com/posts/jevs-architecture-unmasked/).
 Models by [Qwen](https://huggingface.co/Qwen). Not affiliated with TypeSafe.
+
+## License
+
+[MIT](LICENSE). Do whatever you like with it. The Qwen model weights carry their own
+(Apache-2.0) license.
