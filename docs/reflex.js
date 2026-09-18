@@ -98,11 +98,19 @@ export function toAnswer(kind, keys, p, q) {
     probabilities: Object.fromEntries(keys.map((i) => [String(i), p[i]])), confidence: confidence(p) };
 }
 
-export async function loadEngine({ transformers, device = "webgpu", modelId = MODEL_ID, onProgress } = {}) {
-  const { AutoProcessor, Qwen3_5ForConditionalGeneration, cat } = transformers;
+// dtype presets for the decoder. On WebGPU, fp16 activations (q4f16 / fp16) are usually
+// much faster than q4 (fp32 activations); q4 is the safe default that runs everywhere.
+export const DTYPES = {
+  q4: { embed_tokens: "q4", vision_encoder: "fp16", decoder_model_merged: "q4" },
+  q4f16: { embed_tokens: "q4f16", vision_encoder: "fp16", decoder_model_merged: "q4f16" },
+  fp16: { embed_tokens: "fp16", vision_encoder: "fp16", decoder_model_merged: "fp16" },
+};
+
+export async function loadEngine({ transformers, device = "webgpu", modelId = MODEL_ID, dtype = "q4", onProgress } = {}) {
+  const { AutoProcessor, AutoModelForImageTextToText, cat } = transformers;
   const processor = await AutoProcessor.from_pretrained(modelId, { progress_callback: onProgress });
-  const model = await Qwen3_5ForConditionalGeneration.from_pretrained(modelId, {
-    dtype: { embed_tokens: "q4", vision_encoder: "fp16", decoder_model_merged: "q4" },
+  const model = await AutoModelForImageTextToText.from_pretrained(modelId, {
+    dtype: DTYPES[dtype] ?? dtype,
     device,
     progress_callback: onProgress,
   });
@@ -186,5 +194,5 @@ export async function loadEngine({ transformers, device = "webgpu", modelId = MO
     return { model: modelId, answers, usage: { input_tokens: tokens, questions: entries.length, forwards: batch ? 1 : entries.length, ms: performance.now() - t0 } };
   }
 
-  return { processor, model, answer, device, modelId };
+  return { processor, model, answer, device, modelId, dtype };
 }

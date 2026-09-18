@@ -1,5 +1,10 @@
 import * as transformers from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0";
-import { loadEngine, MODEL_ID } from "./reflex.js";
+import { loadEngine, MODEL_ID, DTYPES } from "./reflex.js";
+
+// ?dtype=q4|q4f16|fp16 and ?model=<hub id> let you A/B speed without redeploying.
+const params = new URLSearchParams(location.search);
+const DTYPE = DTYPES[params.get("dtype")] ? params.get("dtype") : "q4";
+const MODEL = params.get("model") || MODEL_ID;
 
 const $ = (id) => document.getElementById(id);
 const PRESETS = {
@@ -112,9 +117,9 @@ async function ensureEngine() {
   const device = hasWebGPU ? "webgpu" : "wasm";
   if (!hasWebGPU) $("gpu-warning").hidden = false;
   const seen = new Map();
-  setStatus(`Loading ${MODEL_ID} on ${device}…`, 0, "busy");
+  setStatus(`Loading ${MODEL} (${DTYPE}) on ${device}…`, 0, "busy");
   engine = await loadEngine({
-    transformers, device,
+    transformers, device, modelId: MODEL, dtype: DTYPE,
     onProgress: (e) => {
       if (e.status === "progress") seen.set(e.file, [e.loaded, e.total]);
       let l = 0, t = 0;
@@ -123,7 +128,7 @@ async function ensureEngine() {
       if (e.status === "ready") setStatus("Compiling…", 100, "busy");
     },
   });
-  setStatus(`Ready on ${device}. The first run compiles shaders and is slower.`, 100, "ready");
+  setStatus(`Ready: ${MODEL.split("/").pop()} · ${DTYPE} · ${device}. The first run compiles shaders and is slower.`, 100, "ready");
   $("run").disabled = false;
   $("load").disabled = true;
   return engine;
@@ -144,7 +149,7 @@ async function run() {
     const eng = await ensureEngine();
     setStatus("Thinking: one forward pass per question, no text generated…", 100, "busy");
     const resp = await eng.answer({ state, questions }, { image, temperature, onQuestion: renderAnswer });
-    $("usage").textContent = `${resp.usage.questions} questions in ${resp.usage.forwards} forward pass · ${resp.usage.input_tokens} tokens · ${resp.usage.ms.toFixed(0)} ms total · temperature ${temperature}`;
+    $("usage").textContent = `${resp.usage.questions} questions in ${resp.usage.forwards} forward pass · ${resp.usage.input_tokens} tokens · ${resp.usage.ms.toFixed(0)} ms total (${(1000 * resp.usage.input_tokens / resp.usage.ms).toFixed(0)} tok/s) · ${DTYPE} · temperature ${temperature}`;
     $("usage").hidden = false;
     setStatus("Done.", 100, "ready");
   } catch (e) {
