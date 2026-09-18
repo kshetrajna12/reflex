@@ -187,6 +187,10 @@ The raw model already orders things sensibly; the point of the design is that th
 outputs are numbers, so thresholds are yours, and with your own history of reverted or
 hotfixed PRs the calibrator can be trained so "80 %" means 80 % on your codebase.
 
+The [browser demo](https://kshetrajna12.github.io/reflex/) has the same triage at the
+bottom of the page: it fetches a public PR from the GitHub API and runs it on the 0.8B
+model on your GPU. Expect a rougher ordering than the 4B; it is the same questions.
+
 ## How it works, in one paragraph
 
 The state is run through the model once and its internal cache is kept. Every question is

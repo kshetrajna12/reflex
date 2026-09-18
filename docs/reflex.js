@@ -260,9 +260,14 @@ export async function loadEngine({ transformers, device = "webgpu", modelId = MO
   // re-reads the state) but finishes sooner on a fast GPU. On a slow GPU the work
   // dominates the per-forward overhead, so the shared path is both cooler and about as
   // fast. `lowPower: "auto"` decides from the throughput measured on batched passes.
-  const policy = { lowPower: "auto", batchedTokPerSec: null, autoThreshold: 1200 };
+  // Also: the batched pass re-reads the state once per question, so for states beyond
+  // ~200 tokens the shared path is faster even cold (crossover ≈ N·overhead/((N-1)·cost
+  // per token) ≈ 120-150 tokens on the machine we measured).
+  const policy = { lowPower: "auto", batchedTokPerSec: null, autoThreshold: 1200, sharedAboveStateTokens: 200 };
   const setPolicy = (p) => Object.assign(policy, p);
-  const preferShared = () => policy.lowPower === true || (policy.lowPower === "auto" && policy.batchedTokPerSec !== null && policy.batchedTokPerSec < policy.autoThreshold);
+  const preferShared = (stateTokens) =>
+    policy.lowPower === true ||
+    (policy.lowPower === "auto" && (stateTokens > policy.sharedAboveStateTokens || (policy.batchedTokPerSec !== null && policy.batchedTokPerSec < policy.autoThreshold)));
 
   function answer(req, { image = null, temperature = 1.0, onQuestion, share = "auto", batch = true } = {}) {
     return enqueue(() => answerNow(req, { image, temperature, onQuestion, share, batch }));
@@ -281,7 +286,8 @@ export async function loadEngine({ transformers, device = "webgpu", modelId = MO
     let encoded = stateCache.get(key);
     let usage;
     const t0 = performance.now();
-    if (share === true || (share === "auto" && (encoded || preferShared()))) {
+    const stateTokens = encoded ? encoded.ids.dims[1] : tok.encode(pre, { add_special_tokens: false }).length;
+    if (share === true || (share === "auto" && (encoded || preferShared(stateTokens)))) {
       const hit = !!encoded;
       if (!encoded) { encoded = await encodePrefix(pre, img); rememberPrefix(key, encoded); }
       const { rows, tokens } = await sharedLogits(encoded, entries.map((e) => e.br.text), entries.map((e) => e.br.labels));

@@ -171,7 +171,8 @@ shuffles option order as augmentation, which also attacks letter-position bias.
 
 ## Browser version (`docs/`)
 
-`docs/index.html` + `docs/app.js` + `docs/reflex.js` run the same design on
+`docs/index.html` + `docs/app.js` + `docs/reflex.js` (+ `docs/pr.js`, the PR triage
+port of `examples/pr_review.py`) run the same design on
 [transformers.js](https://github.com/huggingface/transformers.js) with WebGPU and
 `onnx-community/Qwen3.5-0.8B-ONNX-OPT` (q4f16 decoder, fp16 vision encoder, ~650 MB;
 `?dtype=q4` / `?dtype=fp16` and `?model=` URL overrides exist for A/B tests).

@@ -1,5 +1,6 @@
 import * as transformers from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0";
 import { loadEngine, MODEL_ID, DTYPES } from "./reflex.js";
+import { fetchPR, reviewPR } from "./pr.js";
 
 // ?dtype=q4|q4f16|fp16 and ?model=<hub id> let you A/B speed without redeploying.
 const params = new URLSearchParams(location.search);
@@ -131,6 +132,8 @@ async function ensureEngine() {
   if ($("lowpower").checked) engine.setPolicy({ lowPower: true });
   setStatus(`Ready: ${MODEL.split("/").pop()} · ${DTYPE} · ${device}. The first run compiles shaders and is slower.`, 100, "ready");
   $("run").disabled = false;
+  $("pr-run").disabled = false;
+  $("pr-status").textContent = "Ready.";
   $("load").disabled = true;
   return engine;
 }
@@ -177,3 +180,63 @@ $("run").addEventListener("click", run);
 $("load").addEventListener("click", () => ensureEngine().catch((e) => setStatus(`Error: ${e.message}`, null, "idle")));
 loadPreset("ticket");
 if (!navigator.gpu) $("gpu-warning").hidden = false;
+
+
+// ---------------------------------------------------------------- PR triage section
+function prStatus(text, pct, mode = "idle") {
+  $("pr-status").textContent = text;
+  $("pr-bar").style.width = pct == null ? "0%" : `${Math.round(100 * pct)}%`;
+  $("pr-dot").className = `dot ${mode}`;
+}
+const pct = (p) => `${(100 * p).toFixed(0)}%`;
+
+function renderPR(out) {
+  const s = out.summary;
+  const kinds = Object.entries(s.kind_probs).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} ${pct(v)}`).join(" · ");
+  const flags = [];
+  if (s.needs_tests) flags.push("needs tests: behaviour changes, no test files touched");
+  if (s.sensitive) flags.push(`${s.sensitive} hunk(s) in sensitive areas`);
+  if (s.weakens_errors) flags.push(`${s.weakens_errors} hunk(s) weaken error handling`);
+  if (s.debug) flags.push(`${s.debug} hunk(s) with debug leftovers`);
+  if (s.breaking_change > 0.5) flags.push("likely breaking change");
+  const row = (r) => `<tr class="${r.is_test ? "test" : ""}"><td class="p">${pct(r.p_needs_eyes)}</td><td class="f">${esc(r.file)}<br><span class="meta">${esc(r.header.slice(0, 40))} +${r.added}/−${r.removed}</span></td><td>${["sensitive_area", "removes_error_handling", "public_api_change", "leftover_debug"].filter((k) => r[k] > 0.5).map((k) => k.replaceAll("_", " ")).join(", ") || "<span class='meta'>—</span>"}</td></tr>`;
+  const list = [...s.escalate, ...s.escalate_tests];
+  $("pr-out").innerHTML = `
+    <h3 style="margin:16px 0 4px;font:500 22px/1.2 var(--serif)"><a href="${out.pr.url}" target="_blank" rel="noopener">#${out.pr.number}</a> ${esc(out.pr.title)}</h3>
+    <div class="prhead">
+      <div class="stat"><div class="k">kind</div><div class="v">${esc(s.kind)}<small>${kinds}</small></div></div>
+      <div class="stat"><div class="k">risk</div><div class="v">${s.risk.toFixed(2)}<small>of 3</small></div></div>
+      <div class="stat"><div class="k">breaking</div><div class="v">${pct(s.breaking_change)}</div></div>
+      <div class="stat"><div class="k">needs migration</div><div class="v">${pct(s.needs_migration)}</div></div>
+      <div class="stat"><div class="k">description matches</div><div class="v">${pct(s.description_matches)}</div></div>
+      <div class="stat"><div class="k">hunks</div><div class="v">${s.reviewed}<small>of ${s.total_hunks}, ${s.logic_hunks} change behaviour</small></div></div>
+    </div>
+    <div>${flags.length ? flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("") : "<span class='meta'>no flags</span>"}</div>
+    <div class="cardtitle" style="margin-top:18px">Hunks to hand to a reviewer (P(careful read) ≥ 50%)</div>
+    ${list.length ? `<div class="tablewrap"><table class="hunks"><thead><tr><th>P</th><th>hunk</th><th>why</th></tr></thead><tbody>${list.map(row).join("")}</tbody></table></div>` : "<p class='meta'>nothing; every hunk looks routine</p>"}
+    <p class="meta" style="margin-top:10px">Test hunks are greyed. A 0.8B model judging code: treat these as a triage order, not a verdict, and calibrate on your own PR history before trusting thresholds.</p>`;
+}
+
+async function runPR() {
+  const repo = $("pr-repo").value.trim();
+  const number = Number($("pr-number").value);
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !number) { prStatus("Enter owner/repo and a PR number.", null, "idle"); return; }
+  $("pr-run").disabled = true;
+  $("pr-out").innerHTML = "";
+  try {
+    const eng = await ensureEngine();
+    prStatus("Fetching from GitHub…", 0, "busy");
+    const pr = await fetchPR(repo, number);
+    const t0 = performance.now();
+    const out = await reviewPR(eng, pr, { maxHunks: Number($("pr-max").value), temperature: Number($("temp").value), onProgress: (t, p) => prStatus(t, p, "busy") });
+    renderPR(out);
+    prStatus(`Done in ${((performance.now() - t0) / 1000).toFixed(1)} s.`, 1, "ready");
+  } catch (e) {
+    prStatus(`Error: ${e.message}`, null, "idle");
+    console.error(e);
+  } finally {
+    $("pr-run").disabled = false;
+  }
+}
+$("pr-run").addEventListener("click", runPR);
+$("pr-max").addEventListener("input", () => { $("pr-max-val").textContent = $("pr-max").value; });

@@ -65,6 +65,13 @@
   .temp { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin-left: auto; }
   .temp output { font-family: var(--mono); color: var(--fg); min-width: 2.4em; }
   input[type=range] { accent-color: var(--acc); width: 140px; }
+  input.txt { font: 500 14px var(--mono); color: var(--fg); background: var(--card); border: 1px solid var(--line2); border-radius: 999px; padding: 8px 14px; width: 220px; }
+  input.txt:focus { outline: none; border-color: var(--acc); }
+  .prhead { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
+  .stat { background: var(--bg2); border-radius: 12px; padding: 10px 12px; } .stat .k { font: 500 11px var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); } .stat .v { font: 500 22px/1.2 var(--serif); margin-top: 2px; } .stat .v small { font: 13px var(--sans); color: var(--muted); margin-left: 6px; }
+  .flag { display:inline-block; margin: 4px 6px 0 0; padding: 4px 10px; border-radius: 999px; font-size: 13px; background: rgba(217,119,63,.12); border: 1px solid rgba(217,119,63,.35); }
+  table.hunks { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13.5px; } table.hunks th { text-align: left; font: 500 11px var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); } table.hunks td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; } table.hunks td.f { font-family: var(--mono); font-size: 12.5px; word-break: break-all; } table.hunks td.p { font: 500 13px var(--mono); color: var(--best); white-space: nowrap; } table.hunks tr.test td.p { color: var(--muted); }
+  .tablewrap { overflow-x: auto; }
 
   .statusline { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13.5px; min-height: 22px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
@@ -159,6 +166,20 @@
     <span class="cardtitle">Answers</span>
     <div id="answers"><div class="empty">Nothing yet. Load the model and press Run.</div></div>
     <div class="usage" id="usage" hidden></div>
+  </section>
+
+  <section class="card" style="margin-top:18px" id="pr-card">
+    <span class="cardtitle">Or: triage a pull request</span>
+    <p class="hint" style="margin:0 0 12px">The same idea applied to code review. The page fetches a public GitHub PR, asks five questions about the PR and six about each diff hunk, and lists the hunks a reviewer should actually read. Numbers only; a reasoning model or a human writes the comments. The full-size version is <code>examples/pr_review.py</code>.</p>
+    <div class="toolbar" style="margin-bottom:8px">
+      <input id="pr-repo" class="txt" placeholder="owner/repo" value="pydantic/pydantic" spellcheck="false">
+      <input id="pr-number" class="txt" placeholder="PR #" value="13821" style="width:90px">
+      <span class="temp"><span>hunks</span><input id="pr-max" type="range" min="2" max="30" step="1" value="10"><output id="pr-max-val">10</output></span>
+      <button id="pr-run" class="primary" disabled>Triage</button>
+    </div>
+    <div class="statusline"><span class="dot" id="pr-dot"></span><span id="pr-status">Load the model first.</span></div>
+    <div class="barwrap"><div id="pr-bar" style="height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--acc2));transition:width .25s"></div></div>
+    <div id="pr-out"></div>
   </section>
 
   <footer>
