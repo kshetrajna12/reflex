@@ -310,7 +310,10 @@ def review(pr: dict, client: Client, max_hunks: int, max_chars: int, verbose: bo
 
     for r in hunk_rows:
         r["p_needs_eyes"] = p_at_least(r["needs_eyes_probs"], 2)
-    escalate = sorted(hunk_rows, key=lambda r: -r["p_needs_eyes"])
+    # production code first; test hunks are listed separately (they need eyes for other reasons)
+    escalate = sorted(
+        hunk_rows, key=lambda r: (bool(TEST_PATTERNS.search(r["file"])), -r["p_needs_eyes"])
+    )
     logic_hunks = [
         r for r in hunk_rows if r["behaviour_change"] > 0.5 and not TEST_PATTERNS.search(r["file"])
     ]
@@ -330,7 +333,12 @@ def review(pr: dict, client: Client, max_hunks: int, max_chars: int, verbose: bo
         "needs_tests": bool(logic_hunks)
         and not test_files
         and pr_answers["kind"]["choice"] not in ("docs", "chore"),
-        "escalate": [r for r in escalate if r["p_needs_eyes"] >= 0.5][:10],
+        "escalate": [
+            r for r in escalate if r["p_needs_eyes"] >= 0.5 and not TEST_PATTERNS.search(r["file"])
+        ][:10],
+        "escalate_tests": [
+            r for r in escalate if r["p_needs_eyes"] >= 0.5 and TEST_PATTERNS.search(r["file"])
+        ][:5],
         "hunks_reviewed": len(hunk_rows),
         "hunks_skipped": skipped,
         "timing_s": {"pr": round(t_pr, 2), "hunks": round(t_hunks, 2)},
@@ -391,6 +399,12 @@ def print_report(out: dict) -> None:
         print(
             f"  {pct(r['p_needs_eyes'])}  {r['file']}  {r['header'][:28]:<28} +{r['added']}/-{r['removed']}  {', '.join(why)}"
         )
+    if s["escalate_tests"]:
+        print("test hunks worth a look:")
+        for r in s["escalate_tests"]:
+            print(
+                f"  {pct(r['p_needs_eyes'])}  {r['file']}  {r['header'][:28]:<28} +{r['added']}/-{r['removed']}"
+            )
     print(
         f"\n{s['timing_s']['pr']:.1f}s PR level, {s['timing_s']['hunks']:.1f}s for {s['hunks_reviewed']} hunks"
     )

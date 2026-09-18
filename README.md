@@ -160,6 +160,33 @@ uv run reflex-serve --adapter runs/lora --calibration runs/lora/calibration.json
 
 The data format is one JSON object per line: `{"state": ..., "questions": {...}, "labels": {question_id: answer}}`.
 
+## Example: triaging a pull request
+
+`examples/pr_review.py` is a small AI PR-review triage built on this: a PR-level state
+(title, description, files) answers *what kind of change, how risky, breaking, needs a
+migration, does the description match*, and every diff hunk answers *sensitive area,
+weakens error handling, debug leftovers, public API change, behaviour change, and how
+much a senior reviewer would want to look*. Code aggregates the numbers and prints the
+hunks to hand to a reasoning model or a human.
+
+```bash
+uv run python examples/pr_review.py --repo pydantic/pydantic --pr 13824
+```
+```
+kind            feature    feature   98%  bugfix    1%  chore    0%
+risk            1.96 / 3   (max hunk needs-eyes 2.02 / 3)
+breaking          29%      needs migration   27%      description matches   82%
+hunks           40 reviewed, 0 skipped   logic hunks 20   test files changed 7
+escalate to a reasoning model / human (P(needs a careful read) >= 50%):
+    84%  pydantic-core/src/validators/counter.rs        @@ -0,0 +1,182 @@   +182/-0
+    82%  pydantic-core/src/input/input_python.rs        @@ -487,6 +488,28 @@ +22/-0
+    81%  pydantic-core/src/serializers/type_serializers/counter.rs  ...    +164/-0
+1.2s PR level, 13.3s for 40 hunks
+```
+The raw model already orders things sensibly; the point of the design is that the
+outputs are numbers, so thresholds are yours, and with your own history of reverted or
+hotfixed PRs the calibrator can be trained so "80 %" means 80 % on your codebase.
+
 ## How it works, in one paragraph
 
 The state is run through the model once and its internal cache is kept. Every question is
