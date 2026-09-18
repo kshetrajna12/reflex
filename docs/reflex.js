@@ -237,7 +237,30 @@ export async function loadEngine({ transformers, device = "webgpu", modelId = MO
   const stateCache = new Map(); // prefix text (+image id) -> encoded prefix, tiny LRU
   const STATE_CACHE_MAX = 4;
 
-  async function answer(req, { image = null, temperature = 1.0, onQuestion, share = true, batch = true } = {}) {
+  // One GPU job at a time: requests and background prefix encodes are serialised.
+  let queue = Promise.resolve();
+  const enqueue = (job) => { const p = queue.then(job, job); queue = p.catch(() => {}); return p; };
+  const idle = () => queue;
+
+  function rememberPrefix(key, encoded) {
+    stateCache.set(key, encoded);
+    if (stateCache.size > STATE_CACHE_MAX) {
+      const oldest = stateCache.keys().next().value;
+      stateCache.get(oldest).dispose();
+      stateCache.delete(oldest);
+    }
+  }
+
+  // Strategy (measured on WebGPU, ticket preset): a cold state is fastest as ONE batched
+  // forward where every row re-reads the state (~381 ms). The ONNX attention op cannot
+  // continue a cache in batch, so the shared-cache path is one small forward per
+  // question and only wins once the state is already encoded (~300 ms warm). So: cold ->
+  // batched forward, then encode the state in the background; warm -> shared cache.
+  function answer(req, { image = null, temperature = 1.0, onQuestion, share = "auto", batch = true } = {}) {
+    return enqueue(() => answerNow(req, { image, temperature, onQuestion, share, batch }));
+  }
+
+  async function answerNow(req, { image, temperature, onQuestion, share, batch }) {
     const [stateText, nImages] = splitImages(req.state);
     if (nImages > 1) throw new Error("the browser demo supports one image per request");
     if (nImages === 1 && !image) throw new Error("state references an image but none was provided");
@@ -245,41 +268,34 @@ export async function loadEngine({ transformers, device = "webgpu", modelId = MO
     const img = nImages ? image : null;
     const entries = Object.entries(req.questions).map(([qid, q]) => ({ qid, q, br: buildBranch(q) }));
     const answers = {};
+    const emit = (rows) => entries.forEach((e, i) => { answers[e.qid] = toAnswer(e.br.kind, e.br.keys, softmax(rows[i], temperature), e.q); onQuestion?.(e.qid, answers[e.qid]); });
+    const key = pre + (img ? `|${img.width}x${img.height}|${img.data.length}` : "");
+    let encoded = stateCache.get(key);
     let usage;
     const t0 = performance.now();
-    if (share) {
-      const key = pre + (img ? `|${img.width}x${img.height}|${img.data.length}` : "");
-      let encoded = stateCache.get(key);
+    if (share === true || (share === "auto" && encoded)) {
       const hit = !!encoded;
-      if (!encoded) {
-        encoded = await encodePrefix(pre, img);
-        stateCache.set(key, encoded);
-        if (stateCache.size > STATE_CACHE_MAX) {
-          const oldest = stateCache.keys().next().value;
-          stateCache.get(oldest).dispose();
-          stateCache.delete(oldest);
-        }
-      }
-      const tPrefix = performance.now();
+      if (!encoded) { encoded = await encodePrefix(pre, img); rememberPrefix(key, encoded); }
       const { rows, tokens } = await sharedLogits(encoded, entries.map((e) => e.br.text), entries.map((e) => e.br.labels));
-      entries.forEach((e, i) => { answers[e.qid] = toAnswer(e.br.kind, e.br.keys, softmax(rows[i], temperature), e.q); onQuestion?.(e.qid, answers[e.qid]); });
-      usage = { input_tokens: hit ? tokens - encoded.ids.dims[1] : tokens, state_tokens: encoded.ids.dims[1], state_cache_hit: hit, forwards: entries.length + (hit ? 0 : 1), prefix_ms: tPrefix - t0 };
+      emit(rows);
+      usage = { path: "shared", input_tokens: hit ? tokens - encoded.ids.dims[1] : tokens, state_tokens: encoded.ids.dims[1], state_cache_hit: hit, forwards: entries.length + (hit ? 0 : 1) };
     } else if (batch) {
       const { rows, tokens } = await batchLogits(entries.map((e) => pre + e.br.text), img, entries.map((e) => e.br.labels));
-      entries.forEach((e, i) => { answers[e.qid] = toAnswer(e.br.kind, e.br.keys, softmax(rows[i], temperature), e.q); onQuestion?.(e.qid, answers[e.qid]); });
-      usage = { input_tokens: tokens, forwards: 1 };
+      emit(rows);
+      usage = { path: "batched", input_tokens: tokens, state_cache_hit: false, forwards: 1 };
+      if (share === "auto") {
+        // warm the cache for the next request over this state, off the critical path
+        enqueue(async () => { if (!stateCache.has(key)) rememberPrefix(key, await encodePrefix(pre, img)); });
+      }
     } else {
       let tokens = 0;
-      for (const e of entries) {
-        const { z, tokens: L } = await branchLogits(pre + e.br.text, img, e.br.labels);
-        tokens += L;
-        answers[e.qid] = toAnswer(e.br.kind, e.br.keys, softmax(z, temperature), e.q);
-        onQuestion?.(e.qid, answers[e.qid]);
-      }
-      usage = { input_tokens: tokens, forwards: entries.length };
+      const rows = [];
+      for (const e of entries) { const { z, tokens: L } = await branchLogits(pre + e.br.text, img, e.br.labels); rows.push(z); tokens += L; }
+      emit(rows);
+      usage = { path: "sequential", input_tokens: tokens, state_cache_hit: false, forwards: entries.length };
     }
     return { model: modelId, answers, usage: { ...usage, questions: entries.length, ms: performance.now() - t0 } };
   }
 
-  return { processor, model, answer, device, modelId, dtype };
+  return { processor, model, answer, idle, device, modelId, dtype };
 }

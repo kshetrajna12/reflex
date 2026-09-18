@@ -177,17 +177,19 @@ shuffles option order as augmentation, which also attacks letter-position bias.
 `?dtype=q4` / `?dtype=fp16` and `?model=` URL overrides exist for A/B tests).
 `reflex.js` mirrors `prompt.py` + `readout.py`: same ChatML prefix, same option labels,
 same restricted-softmax readout via `model.forward` (no `generate`). All questions of a
-request share the state: the state prefix (text and image) is run once and its decoder
-cache kept in a small LRU, then each question branch runs alone as a continuation of
-that cache with `num_logits_to_keep = 1`. So a request costs `state + sum(branches)`
-tokens, and a repeat request over the same state costs only the branches. The ONNX
-`GroupQueryAttention` op refuses a batched multi-token continuation from a cache, so the
-Python engine's batch-expanded cache is not possible here and it is one small forward
-per question instead; `answer(req, { share: false })` keeps the earlier one-batched-
-forward path (all rows re-read the state), and `{ share: false, batch: false }` the naive
-one. Measured on one laptop WebGPU, ticket preset (4 text questions): full re-read
-840 tokens, q4 848 ms → q4f16 604 ms → q4f16 + single-position logits 381 ms;
-shared prefix runs 405 tokens cold and 260 warm. Differences from the Python engine:
+request run in one of two ways, picked automatically. **Cold state**: one left-padded
+batched forward where every row re-reads the state, `num_logits_to_keep = 1` so only each
+row's last position goes through the 248k-vocab output projection; then the state prefix
+(text and image) is encoded in the background and its decoder cache kept in a small LRU.
+**Warm state**: each question runs alone as a short continuation of that cache (only the
+branch tokens). The ONNX `GroupQueryAttention` op refuses a batched multi-token
+continuation from a cache (shared check in `group_query_attention_helper.h`, used by the
+WebGPU kernel too), so the Python engine's batch-expanded cache is impossible here; a
+per-question continuation only wins once the state is cached, hence the hybrid.
+Measured on one laptop WebGPU, ticket preset (4 text questions, 840 tokens re-read):
+q4 848 ms → q4f16 604 ms → + single-position logits 381 ms (cold path); warm path 260
+tokens, 300 ms. Answers from both paths match the naive per-question forward to four
+decimals. `answer(req, { share: true|false, batch: false })` forces a path. Differences from the Python engine:
 no state-cache sharing across requests, one image per request, no calibration file (a
 temperature slider instead). `answer(req, { batch: false })` keeps the one-forward-per-
 question path for comparison. Served by GitHub Pages from `docs/`; the model weights are
