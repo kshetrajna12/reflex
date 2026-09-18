@@ -256,6 +256,14 @@ export async function loadEngine({ transformers, device = "webgpu", modelId = MO
   // continue a cache in batch, so the shared-cache path is one small forward per
   // question and only wins once the state is already encoded (~300 ms warm). So: cold ->
   // batched forward, then encode the state in the background; warm -> shared cache.
+  // Policy. The batched cold pass does ~2x the token work of the shared path (every row
+  // re-reads the state) but finishes sooner on a fast GPU. On a slow GPU the work
+  // dominates the per-forward overhead, so the shared path is both cooler and about as
+  // fast. `lowPower: "auto"` decides from the throughput measured on batched passes.
+  const policy = { lowPower: "auto", batchedTokPerSec: null, autoThreshold: 1200 };
+  const setPolicy = (p) => Object.assign(policy, p);
+  const preferShared = () => policy.lowPower === true || (policy.lowPower === "auto" && policy.batchedTokPerSec !== null && policy.batchedTokPerSec < policy.autoThreshold);
+
   function answer(req, { image = null, temperature = 1.0, onQuestion, share = "auto", batch = true } = {}) {
     return enqueue(() => answerNow(req, { image, temperature, onQuestion, share, batch }));
   }
@@ -273,7 +281,7 @@ export async function loadEngine({ transformers, device = "webgpu", modelId = MO
     let encoded = stateCache.get(key);
     let usage;
     const t0 = performance.now();
-    if (share === true || (share === "auto" && encoded)) {
+    if (share === true || (share === "auto" && (encoded || preferShared()))) {
       const hit = !!encoded;
       if (!encoded) { encoded = await encodePrefix(pre, img); rememberPrefix(key, encoded); }
       const { rows, tokens } = await sharedLogits(encoded, entries.map((e) => e.br.text), entries.map((e) => e.br.labels));
@@ -283,6 +291,8 @@ export async function loadEngine({ transformers, device = "webgpu", modelId = MO
       const { rows, tokens } = await batchLogits(entries.map((e) => pre + e.br.text), img, entries.map((e) => e.br.labels));
       emit(rows);
       usage = { path: "batched", input_tokens: tokens, state_cache_hit: false, forwards: 1 };
+      const tps = (1000 * tokens) / (performance.now() - t0);
+      policy.batchedTokPerSec = policy.batchedTokPerSec === null ? tps : 0.5 * (policy.batchedTokPerSec + tps);
       if (share === "auto") {
         // warm the cache for the next request over this state, off the critical path
         enqueue(async () => { if (!stateCache.has(key)) rememberPrefix(key, await encodePrefix(pre, img)); });
@@ -297,5 +307,5 @@ export async function loadEngine({ transformers, device = "webgpu", modelId = MO
     return { model: modelId, answers, usage: { ...usage, questions: entries.length, ms: performance.now() - t0 } };
   }
 
-  return { processor, model, answer, idle, device, modelId, dtype };
+  return { processor, model, answer, idle, setPolicy, policy, device, modelId, dtype };
 }

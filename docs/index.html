@@ -132,6 +132,7 @@
     <button id="load" class="secondary">Load model</button>
     <button id="run" class="primary" disabled>Run</button>
     <span class="temp"><span>temperature</span><input id="temp" type="range" min="0.5" max="4" step="0.1" value="1.0"><output id="temp-val">1.0</output></span>
+    <label class="temp" for="lowpower" style="margin:0;text-transform:none;letter-spacing:0;font-weight:400;font-size:13px"><input id="lowpower" type="checkbox"> low power</label>
   </div>
   <div class="statusline"><span class="dot" id="dot"></span><span id="status">Model not loaded.</span></div>
   <div class="barwrap"><div id="bar"></div></div>
@@ -161,6 +162,7 @@
   </section>
 
   <footer>
+    <p><i>Low power</i> encodes the state once and runs each question as a short pass over it, about half the GPU work of the default single batched pass. On fast GPUs the batched pass finishes sooner; on slow or hot machines the lighter path is about as fast and runs cooler, and the page switches to it by itself when it measures a slow batched pass.</p>
     <p>The percentages from a raw 0.8B model are only roughly honest. Nudge <i>temperature</i> above 1 to soften over-confident answers; the Python package can fit this from labelled data and gets within noise of TypeSafe's Jev on MMLU with a 4B model.</p>
     <p><a href="https://github.com/kshetrajna12/reflex">Source, the full-size Python server, and how it works</a> · an open re-creation of TypeSafe's Jev · MIT.</p>
   </footer>

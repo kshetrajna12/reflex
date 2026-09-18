@@ -189,7 +189,11 @@ per-question continuation only wins once the state is cached, hence the hybrid.
 Measured on one laptop WebGPU, ticket preset (4 text questions, 840 tokens re-read):
 q4 848 ms → q4f16 604 ms → + single-position logits 381 ms (cold path); warm path 260
 tokens, 300 ms. Answers from both paths match the naive per-question forward to four
-decimals. `answer(req, { share: true|false, batch: false })` forces a path. Differences from the Python engine:
+decimals. `answer(req, { share: true|false, batch: false })` forces a path. The batched
+cold pass does about twice the token work of the shared path (every row re-reads the
+state), so on slow or thermally limited GPUs the page's "low power" policy uses the
+shared path for cold states too; it switches on automatically when a batched pass
+measures under 1,200 tokens/s (`engine.setPolicy({ lowPower })`). Differences from the Python engine:
 no state-cache sharing across requests, one image per request, no calibration file (a
 temperature slider instead). `answer(req, { batch: false })` keeps the one-forward-per-
 question path for comparison. Served by GitHub Pages from `docs/`; the model weights are

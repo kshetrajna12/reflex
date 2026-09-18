@@ -128,6 +128,7 @@ async function ensureEngine() {
       if (e.status === "ready") setStatus("Compiling…", 100, "busy");
     },
   });
+  if ($("lowpower").checked) engine.setPolicy({ lowPower: true });
   setStatus(`Ready: ${MODEL.split("/").pop()} · ${DTYPE} · ${device}. The first run compiles shaders and is slower.`, 100, "ready");
   $("run").disabled = false;
   $("load").disabled = true;
@@ -150,7 +151,9 @@ async function run() {
     setStatus("Thinking: one forward pass per question, no text generated…", 100, "busy");
     const resp = await eng.answer({ state, questions }, { image, temperature, onQuestion: renderAnswer });
     const u = resp.usage;
-    const stateNote = u.state_cache_hit ? `state cached (${u.state_tokens} tokens skipped, ${u.forwards} small passes)` : `${u.forwards} batched pass, state not cached yet`;
+    const stateNote = u.path === "shared"
+      ? (u.state_cache_hit ? `state cached (${u.state_tokens} tokens skipped, ${u.forwards} small passes)` : `state encoded once + ${u.questions} small passes (low power)`)
+      : `1 batched pass, state not cached yet`;
     $("usage").textContent = `${u.questions} questions · ${stateNote} · ${u.input_tokens} tokens run · ${u.ms.toFixed(0)} ms total · ${DTYPE} · temperature ${temperature}`;
     $("usage").hidden = false;
     setStatus("Done.", 100, "ready");
@@ -168,6 +171,8 @@ for (const [k, p] of Object.entries(PRESETS)) {
 $("preset").addEventListener("change", (e) => loadPreset(e.target.value));
 $("file").addEventListener("change", async (e) => { if (e.target.files[0]) await setImageFromBlob(e.target.files[0]); });
 $("temp").addEventListener("input", () => { $("temp-val").textContent = $("temp").value; });
+$("lowpower").addEventListener("change", () => { const v = $("lowpower").checked; engine?.setPolicy({ lowPower: v ? true : "auto" }); try { localStorage.setItem("reflex.lowpower", v ? "1" : "0"); } catch {} });
+try { if (localStorage.getItem("reflex.lowpower") === "1") $("lowpower").checked = true; } catch {}
 $("run").addEventListener("click", run);
 $("load").addEventListener("click", () => ensureEngine().catch((e) => setStatus(`Error: ${e.message}`, null, "idle")));
 loadPreset("ticket");
