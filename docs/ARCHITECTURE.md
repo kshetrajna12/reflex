@@ -177,12 +177,17 @@ shuffles option order as augmentation, which also attacks letter-position bias.
 `?dtype=q4` / `?dtype=fp16` and `?model=` URL overrides exist for A/B tests).
 `reflex.js` mirrors `prompt.py` + `readout.py`: same ChatML prefix, same option labels,
 same restricted-softmax readout via `model.forward` (no `generate`). All questions of a
-request run as one left-padded batch in a single forward (the `batched` strategy; the
-ONNX graph builds its own causal mask so packing is not available), with the image
-preprocessed once and its patches repeated per row, and `num_logits_to_keep = 1` so the
-output projection over the 248k vocabulary runs only at each row's last token instead of
-every position (that projection and the logits copy-back were a large share of the time).
-Measured on one laptop WebGPU, 4 text questions / 840 tokens: q4 848 ms, q4f16 604 ms. Differences from the Python engine:
+request share the state: the state prefix (text and image) is run once and its decoder
+cache kept in a small LRU, then each question branch runs alone as a continuation of
+that cache with `num_logits_to_keep = 1`. So a request costs `state + sum(branches)`
+tokens, and a repeat request over the same state costs only the branches. The ONNX
+`GroupQueryAttention` op refuses a batched multi-token continuation from a cache, so the
+Python engine's batch-expanded cache is not possible here and it is one small forward
+per question instead; `answer(req, { share: false })` keeps the earlier one-batched-
+forward path (all rows re-read the state), and `{ share: false, batch: false }` the naive
+one. Measured on one laptop WebGPU, ticket preset (4 text questions): full re-read
+840 tokens, q4 848 ms → q4f16 604 ms → q4f16 + single-position logits 381 ms;
+shared prefix runs 405 tokens cold and 260 warm. Differences from the Python engine:
 no state-cache sharing across requests, one image per request, no calibration file (a
 temperature slider instead). `answer(req, { batch: false })` keeps the one-forward-per-
 question path for comparison. Served by GitHub Pages from `docs/`; the model weights are

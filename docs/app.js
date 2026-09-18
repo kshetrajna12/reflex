@@ -149,7 +149,9 @@ async function run() {
     const eng = await ensureEngine();
     setStatus("Thinking: one forward pass per question, no text generated…", 100, "busy");
     const resp = await eng.answer({ state, questions }, { image, temperature, onQuestion: renderAnswer });
-    $("usage").textContent = `${resp.usage.questions} questions in ${resp.usage.forwards} forward pass · ${resp.usage.input_tokens} tokens · ${resp.usage.ms.toFixed(0)} ms total (${(1000 * resp.usage.input_tokens / resp.usage.ms).toFixed(0)} tok/s) · ${DTYPE} · temperature ${temperature}`;
+    const u = resp.usage;
+    const state = u.state_cache_hit ? `state cached (${u.state_tokens} tokens skipped)` : `state ${u.state_tokens} tokens encoded once`;
+    $("usage").textContent = `${u.questions} questions · ${state} · ${u.input_tokens} tokens run · ${u.ms.toFixed(0)} ms total · ${DTYPE} · temperature ${temperature}`;
     $("usage").hidden = false;
     setStatus("Done.", 100, "ready");
   } catch (e) {

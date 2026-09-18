@@ -173,7 +173,71 @@ export async function loadEngine({ transformers, device = "webgpu", modelId = MO
     return { rows, tokens };
   }
 
-  async function answer(req, { image = null, temperature = 1.0, onQuestion, batch = true } = {}) {
+  // ---- prefix sharing -------------------------------------------------------------
+  // Run the state once and keep the decoder cache (attention KV + linear-attention
+  // conv/recurrent states); then run each question branch alone, continuing from that
+  // cache. The ONNX GroupQueryAttention op refuses a *batched* multi-token continuation
+  // from a cache ("batch_size must be 1 when sequence_length > 1 and past context is
+  // given"), so unlike the Python engine's batched strategy this is one small forward
+  // per question. Each forward only sees the branch tokens (no state re-read, no
+  // padding, logits at one position), so a request costs state + sum(branches) tokens.
+
+  function disposeAll(obj) {
+    for (const t of Object.values(obj)) t?.dispose?.();
+  }
+
+  function cacheFromOutputs(out) {
+    const cache = {};
+    for (const name of Object.keys(out)) {
+      if (!name.startsWith("present")) continue;
+      cache[name.replace("present_conv", "past_conv").replace("present_recurrent", "past_recurrent").replace("present_ssm", "past_ssm").replace("present", "past_key_values")] = out[name];
+    }
+    return cache;
+  }
+
+  async function encodePrefix(prefixText, image) {
+    let imageInputs = {};
+    let text = prefixText;
+    if (image) {
+      const one = await processor.image_processor(image);
+      imageInputs = { pixel_values: one.pixel_values, image_grid_thw: one.image_grid_thw };
+      const merge = processor.image_processor.config.merge_size ** 2;
+      const n = Number(one.image_grid_thw.tolist()[0].reduce((a, b) => a * b, 1n)) / merge;
+      text = text.replace("<|image_pad|>", "<|image_pad|>".repeat(n));
+    }
+    const enc = tok(text);
+    const [position_ids] = model.get_rope_index(enc.input_ids, imageInputs.image_grid_thw ?? null, null, enc.attention_mask);
+    const out = await model.forward({ ...enc, ...imageInputs, position_ids, num_logits_to_keep: new Tensor("int64", [1n], []) });
+    return { ids: enc.input_ids, cache: cacheFromOutputs(out), grid: imageInputs.image_grid_thw ?? null, dispose() { disposeAll(this.cache); } };
+  }
+
+  async function sharedLogits(pre, branchTexts, labelsPerRow) {
+    const P = pre.ids.dims[1];
+    const rows = [];
+    let tokens = P;
+    for (let b = 0; b < branchTexts.length; b++) {
+      const enc = tok(branchTexts[b]);
+      const L = enc.input_ids.dims[1];
+      const full_ids = cat([pre.ids, enc.input_ids], 1);
+      const full_mask = new Tensor("int64", new BigInt64Array(P + L).fill(1n), [1, P + L]);
+      const [full_pos] = model.get_rope_index(full_ids, pre.grid, null, full_mask);
+      const out = await model.forward({
+        input_ids: enc.input_ids, attention_mask: full_mask, position_ids: full_pos.slice(null, null, [P, null]),
+        past_key_values: pre.cache, num_logits_to_keep: new Tensor("int64", [1n], []),
+      });
+      const V = out.logits.dims[2];
+      const last = out.logits.data.subarray(0, V);
+      rows.push(labelsPerRow[b].map((l) => Number(last[labelId(l)])));
+      disposeAll(cacheFromOutputs(out)); // GPU-resident present.* outputs would leak otherwise
+      tokens += L;
+    }
+    return { rows, tokens };
+  }
+
+  const stateCache = new Map(); // prefix text (+image id) -> encoded prefix, tiny LRU
+  const STATE_CACHE_MAX = 4;
+
+  async function answer(req, { image = null, temperature = 1.0, onQuestion, share = true, batch = true } = {}) {
     const [stateText, nImages] = splitImages(req.state);
     if (nImages > 1) throw new Error("the browser demo supports one image per request");
     if (nImages === 1 && !image) throw new Error("state references an image but none was provided");
@@ -181,21 +245,40 @@ export async function loadEngine({ transformers, device = "webgpu", modelId = MO
     const img = nImages ? image : null;
     const entries = Object.entries(req.questions).map(([qid, q]) => ({ qid, q, br: buildBranch(q) }));
     const answers = {};
-    let tokens = 0;
+    let usage;
     const t0 = performance.now();
-    if (batch) {
-      const { rows, tokens: n } = await batchLogits(entries.map((e) => pre + e.br.text), img, entries.map((e) => e.br.labels));
-      tokens = n;
+    if (share) {
+      const key = pre + (img ? `|${img.width}x${img.height}|${img.data.length}` : "");
+      let encoded = stateCache.get(key);
+      const hit = !!encoded;
+      if (!encoded) {
+        encoded = await encodePrefix(pre, img);
+        stateCache.set(key, encoded);
+        if (stateCache.size > STATE_CACHE_MAX) {
+          const oldest = stateCache.keys().next().value;
+          stateCache.get(oldest).dispose();
+          stateCache.delete(oldest);
+        }
+      }
+      const tPrefix = performance.now();
+      const { rows, tokens } = await sharedLogits(encoded, entries.map((e) => e.br.text), entries.map((e) => e.br.labels));
       entries.forEach((e, i) => { answers[e.qid] = toAnswer(e.br.kind, e.br.keys, softmax(rows[i], temperature), e.q); onQuestion?.(e.qid, answers[e.qid]); });
+      usage = { input_tokens: hit ? tokens - encoded.ids.dims[1] : tokens, state_tokens: encoded.ids.dims[1], state_cache_hit: hit, forwards: entries.length + (hit ? 0 : 1), prefix_ms: tPrefix - t0 };
+    } else if (batch) {
+      const { rows, tokens } = await batchLogits(entries.map((e) => pre + e.br.text), img, entries.map((e) => e.br.labels));
+      entries.forEach((e, i) => { answers[e.qid] = toAnswer(e.br.kind, e.br.keys, softmax(rows[i], temperature), e.q); onQuestion?.(e.qid, answers[e.qid]); });
+      usage = { input_tokens: tokens, forwards: 1 };
     } else {
+      let tokens = 0;
       for (const e of entries) {
         const { z, tokens: L } = await branchLogits(pre + e.br.text, img, e.br.labels);
         tokens += L;
         answers[e.qid] = toAnswer(e.br.kind, e.br.keys, softmax(z, temperature), e.q);
         onQuestion?.(e.qid, answers[e.qid]);
       }
+      usage = { input_tokens: tokens, forwards: entries.length };
     }
-    return { model: modelId, answers, usage: { input_tokens: tokens, questions: entries.length, forwards: batch ? 1 : entries.length, ms: performance.now() - t0 } };
+    return { model: modelId, answers, usage: { ...usage, questions: entries.length, ms: performance.now() - t0 } };
   }
 
   return { processor, model, answer, device, modelId, dtype };
