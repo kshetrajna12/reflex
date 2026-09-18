@@ -49,12 +49,28 @@ export function parseDiff(diff) {
 const skipPath = (p) => SKIP.some((re) => re.test(p));
 const trim = (t, n) => (t.length <= n ? t : `${t.slice(0, (n * 2) / 3)}\n... [${t.length - n} chars omitted] ...\n${t.slice(-n / 3)}`);
 
-export async function fetchPR(repo, number) {
+// Unauthenticated GitHub allows 60 API calls/hour *per IP address*; an office network
+// behind one NAT address exhausts that quickly and GitHub reports it as 403. A personal
+// access token (no scopes needed for public repos) raises it to 5,000/hour per user.
+export async function fetchPR(repo, number, token = "") {
   const base = `https://api.github.com/repos/${repo}/pulls/${number}`;
+  const headers = (accept) => ({ Accept: accept, ...(token ? { Authorization: `Bearer ${token}` } : {}) });
+  const check = async (r) => {
+    if (r.ok) return r;
+    let detail = "";
+    try { detail = (await r.json()).message || ""; } catch {}
+    const remaining = r.headers.get("x-ratelimit-remaining");
+    const reset = r.headers.get("x-ratelimit-reset");
+    if (r.status === 403 && remaining === "0") {
+      const mins = reset ? Math.max(1, Math.round((Number(reset) * 1000 - Date.now()) / 60000)) : "?";
+      throw new Error(`GitHub rate limit hit for this network's IP address (resets in ~${mins} min). Add a personal access token below to get 5,000 calls/hour.`);
+    }
+    throw new Error(`GitHub ${r.status}${detail ? `: ${detail}` : ""}`);
+  };
   const [meta, diff, files] = await Promise.all([
-    fetch(base, { headers: { Accept: "application/vnd.github+json" } }).then((r) => { if (!r.ok) throw new Error(`GitHub: ${r.status} ${r.statusText}`); return r.json(); }),
-    fetch(base, { headers: { Accept: "application/vnd.github.diff" } }).then((r) => r.text()),
-    fetch(`${base}/files?per_page=100`, { headers: { Accept: "application/vnd.github+json" } }).then((r) => (r.ok ? r.json() : [])),
+    fetch(base, { headers: headers("application/vnd.github+json") }).then(check).then((r) => r.json()),
+    fetch(base, { headers: headers("application/vnd.github.diff") }).then(check).then((r) => r.text()),
+    fetch(`${base}/files?per_page=100`, { headers: headers("application/vnd.github+json") }).then((r) => (r.ok ? r.json() : [])),
   ]);
   return { meta, diff, files };
 }

@@ -177,6 +177,10 @@
       <span class="temp"><span>hunks</span><input id="pr-max" type="range" min="2" max="30" step="1" value="10"><output id="pr-max-val">10</output></span>
       <button id="pr-run" class="primary" disabled>Triage</button>
     </div>
+    <div class="toolbar" style="margin-bottom:8px">
+      <input id="pr-token" class="txt" type="password" placeholder="GitHub token (optional, for shared office IPs)" style="width:340px" autocomplete="off">
+      <span class="meta">Stays in this browser, sent only to api.github.com. Needed when a shared network exhausts GitHub's 60 anonymous calls/hour.</span>
+    </div>
     <div class="statusline"><span class="dot" id="pr-dot"></span><span id="pr-status">Load the model first.</span></div>
     <div class="barwrap"><div id="pr-bar" style="height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--acc2));transition:width .25s"></div></div>
     <div id="pr-out"></div>

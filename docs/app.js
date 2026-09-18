@@ -226,7 +226,9 @@ async function runPR() {
   try {
     const eng = await ensureEngine();
     prStatus("Fetching from GitHub…", 0, "busy");
-    const pr = await fetchPR(repo, number);
+    const token = $("pr-token").value.trim();
+    try { if (token) localStorage.setItem("reflex.ghtoken", token); else localStorage.removeItem("reflex.ghtoken"); } catch {}
+    const pr = await fetchPR(repo, number, token);
     const t0 = performance.now();
     const out = await reviewPR(eng, pr, { maxHunks: Number($("pr-max").value), temperature: Number($("temp").value), onProgress: (t, p) => prStatus(t, p, "busy") });
     renderPR(out);
@@ -240,3 +242,4 @@ async function runPR() {
 }
 $("pr-run").addEventListener("click", runPR);
 $("pr-max").addEventListener("input", () => { $("pr-max-val").textContent = $("pr-max").value; });
+try { const t = localStorage.getItem("reflex.ghtoken"); if (t) $("pr-token").value = t; } catch {}
