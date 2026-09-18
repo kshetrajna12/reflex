@@ -99,7 +99,7 @@ export function toAnswer(kind, keys, p, q) {
 }
 
 export async function loadEngine({ transformers, device = "webgpu", modelId = MODEL_ID, onProgress } = {}) {
-  const { AutoProcessor, Qwen3_5ForConditionalGeneration } = transformers;
+  const { AutoProcessor, Qwen3_5ForConditionalGeneration, cat } = transformers;
   const processor = await AutoProcessor.from_pretrained(modelId, { progress_callback: onProgress });
   const model = await Qwen3_5ForConditionalGeneration.from_pretrained(modelId, {
     dtype: { embed_tokens: "q4", vision_encoder: "fp16", decoder_model_merged: "q4" },
@@ -117,32 +117,73 @@ export async function loadEngine({ transformers, device = "webgpu", modelId = MO
     return labelIds.get(l);
   };
 
-  // One forward pass over "state + branch"; returns restricted logits in label order.
+  // Sequential: one forward pass per branch (kept for comparison / fallback).
   async function branchLogits(text, image, labels) {
     const inputs = await processor(text, image ?? null);
     const out = await model.forward(inputs);
     const [, L, V] = out.logits.dims;
     const last = out.logits.data.subarray((L - 1) * V, L * V);
-    const z = labels.map((l) => Number(last[labelId(l)]));
-    return { z, tokens: L };
+    return { z: labels.map((l) => Number(last[labelId(l)])), tokens: L };
   }
 
-  async function answer(req, { image = null, temperature = 1.0, onQuestion } = {}) {
+  // Batched: every branch is one row of a right-padded batch, ONE forward pass for the
+  // whole request. Same idea as the Python engine's "batched" strategy. The image (if
+  // any) is preprocessed once and its patches repeated per row so the vision encoder
+  // runs as one batched call too.
+  async function batchLogits(texts, image, labelsPerRow) {
+    const B = texts.length;
+    let imageInputs = {};
+    if (image) {
+      // preprocess once, repeat the patch tensor per row (one batched vision-encoder call)
+      const one = await processor.image_processor(image);
+      imageInputs = {
+        pixel_values: cat(Array(B).fill(one.pixel_values), 0),
+        image_grid_thw: cat(Array(B).fill(one.image_grid_thw), 0),
+      };
+      const merge = processor.image_processor.config.merge_size ** 2;
+      const n = Number(one.image_grid_thw.tolist()[0].reduce((a, b) => a * b, 1n)) / merge;
+      texts = texts.map((t) => t.replace("<|image_pad|>", "<|image_pad|>".repeat(n)));
+    }
+    tok.padding_side = "right";
+    const textInputs = tok(texts, { padding: true, truncation: false });
+    const out = await model.forward({ ...textInputs, ...imageInputs });
+    const [, L, V] = out.logits.dims;
+    const mask = textInputs.attention_mask.data;
+    const rows = [];
+    let tokens = 0;
+    for (let b = 0; b < B; b++) {
+      let n = 0;
+      for (let i = 0; i < L; i++) if (Number(mask[b * L + i])) n++;
+      tokens += n;
+      const last = out.logits.data.subarray((b * L + n - 1) * V, (b * L + n) * V);
+      rows.push(labelsPerRow[b].map((l) => Number(last[labelId(l)])));
+    }
+    return { rows, tokens };
+  }
+
+  async function answer(req, { image = null, temperature = 1.0, onQuestion, batch = true } = {}) {
     const [stateText, nImages] = splitImages(req.state);
     if (nImages > 1) throw new Error("the browser demo supports one image per request");
     if (nImages === 1 && !image) throw new Error("state references an image but none was provided");
     const pre = prefix(stateText);
+    const img = nImages ? image : null;
+    const entries = Object.entries(req.questions).map(([qid, q]) => ({ qid, q, br: buildBranch(q) }));
     const answers = {};
     let tokens = 0;
     const t0 = performance.now();
-    for (const [qid, q] of Object.entries(req.questions)) {
-      const br = buildBranch(q);
-      const { z, tokens: L } = await branchLogits(pre + br.text, nImages ? image : null, br.labels);
-      tokens += L;
-      answers[qid] = toAnswer(br.kind, br.keys, softmax(z, temperature), q);
-      onQuestion?.(qid, answers[qid]);
+    if (batch) {
+      const { rows, tokens: n } = await batchLogits(entries.map((e) => pre + e.br.text), img, entries.map((e) => e.br.labels));
+      tokens = n;
+      entries.forEach((e, i) => { answers[e.qid] = toAnswer(e.br.kind, e.br.keys, softmax(rows[i], temperature), e.q); onQuestion?.(e.qid, answers[e.qid]); });
+    } else {
+      for (const e of entries) {
+        const { z, tokens: L } = await branchLogits(pre + e.br.text, img, e.br.labels);
+        tokens += L;
+        answers[e.qid] = toAnswer(e.br.kind, e.br.keys, softmax(z, temperature), e.q);
+        onQuestion?.(e.qid, answers[e.qid]);
+      }
     }
-    return { model: modelId, answers, usage: { input_tokens: tokens, questions: Object.keys(req.questions).length, ms: performance.now() - t0 } };
+    return { model: modelId, answers, usage: { input_tokens: tokens, questions: entries.length, forwards: batch ? 1 : entries.length, ms: performance.now() - t0 } };
   }
 
   return { processor, model, answer, device, modelId };

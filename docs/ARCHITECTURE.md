@@ -175,10 +175,13 @@ shuffles option order as augmentation, which also attacks letter-position bias.
 [transformers.js](https://github.com/huggingface/transformers.js) with WebGPU and
 `onnx-community/Qwen3.5-0.8B-ONNX-OPT` (q4 decoder, fp16 vision encoder, ~650 MB).
 `reflex.js` mirrors `prompt.py` + `readout.py`: same ChatML prefix, same option labels,
-same restricted-softmax readout via a single `model.forward` (no `generate`). Differences
-from the Python engine: one forward per question (no branch packing or cache sharing, the
-ONNX graph builds its own causal mask), one image per request, no calibration file (a
-temperature slider instead). Served by GitHub Pages from `docs/`; the model weights are
+same restricted-softmax readout via `model.forward` (no `generate`). All questions of a
+request run as one right-padded batch in a single forward (the `batched` strategy; the
+ONNX graph builds its own causal mask so packing is not available), with the image
+preprocessed once and its patches repeated per row. Differences from the Python engine:
+no state-cache sharing across requests, one image per request, no calibration file (a
+temperature slider instead). `answer(req, { batch: false })` keeps the one-forward-per-
+question path for comparison. Served by GitHub Pages from `docs/`; the model weights are
 fetched from the Hugging Face hub and cached by the browser.
 
 ## Request extensions
