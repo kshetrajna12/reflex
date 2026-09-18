@@ -173,12 +173,16 @@ shuffles option order as augmentation, which also attacks letter-position bias.
 
 `docs/index.html` + `docs/app.js` + `docs/reflex.js` run the same design on
 [transformers.js](https://github.com/huggingface/transformers.js) with WebGPU and
-`onnx-community/Qwen3.5-0.8B-ONNX-OPT` (q4 decoder, fp16 vision encoder, ~650 MB).
+`onnx-community/Qwen3.5-0.8B-ONNX-OPT` (q4f16 decoder, fp16 vision encoder, ~650 MB;
+`?dtype=q4` / `?dtype=fp16` and `?model=` URL overrides exist for A/B tests).
 `reflex.js` mirrors `prompt.py` + `readout.py`: same ChatML prefix, same option labels,
 same restricted-softmax readout via `model.forward` (no `generate`). All questions of a
-request run as one right-padded batch in a single forward (the `batched` strategy; the
+request run as one left-padded batch in a single forward (the `batched` strategy; the
 ONNX graph builds its own causal mask so packing is not available), with the image
-preprocessed once and its patches repeated per row. Differences from the Python engine:
+preprocessed once and its patches repeated per row, and `num_logits_to_keep = 1` so the
+output projection over the 248k vocabulary runs only at each row's last token instead of
+every position (that projection and the logits copy-back were a large share of the time).
+Measured on one laptop WebGPU, 4 text questions / 840 tokens: q4 848 ms, q4f16 604 ms. Differences from the Python engine:
 no state-cache sharing across requests, one image per request, no calibration file (a
 temperature slider instead). `answer(req, { batch: false })` keeps the one-forward-per-
 question path for comparison. Served by GitHub Pages from `docs/`; the model weights are

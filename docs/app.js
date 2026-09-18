@@ -3,7 +3,7 @@ import { loadEngine, MODEL_ID, DTYPES } from "./reflex.js";
 
 // ?dtype=q4|q4f16|fp16 and ?model=<hub id> let you A/B speed without redeploying.
 const params = new URLSearchParams(location.search);
-const DTYPE = DTYPES[params.get("dtype")] ? params.get("dtype") : "q4";
+const DTYPE = DTYPES[params.get("dtype")] ? params.get("dtype") : "q4f16";
 const MODEL = params.get("model") || MODEL_ID;
 
 const $ = (id) => document.getElementById(id);
