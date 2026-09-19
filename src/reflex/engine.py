@@ -239,6 +239,7 @@ class Engine:
         calibration_path: str | None = None,
         chat: bool | None = None,
         adapter_path: str | None = None,
+        prompt_style: str = "markdown",
         **engine_kwargs,
     ) -> Engine:
         from transformers import (
@@ -271,6 +272,7 @@ class Engine:
         fmt = PromptFormat(
             chat=bool(template) if chat is None else chat,
             no_think="enable_thinking" in template,
+            style=prompt_style,
         )
         cal = Calibration.load(calibration_path)
         eng = cls(model, tok, fmt, cal, model_name=model_id, processor=processor, **engine_kwargs)

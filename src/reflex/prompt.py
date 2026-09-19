@@ -69,16 +69,42 @@ class Branch:
     keys: list[Any] = field(default_factory=list)
 
 
+COMPACT_SYSTEM_PROMPT = (
+    "You are given a JSON object with the state, a question about it, and lettered options. "
+    "Judge the question against the state and pick the single best option. "
+    "Reply with that option's letter only."
+)
+
+
 @dataclass
 class PromptFormat:
-    """How to wrap text for a given model family."""
+    """How to wrap text for a given model family.
+
+    `style` selects the prompt layout:
+      * "markdown": headed sections (# State / # Question / # Options), Yes/No tokens for noul
+      * "compact":  one JSON object {state, question, options:[{letter, text}]} with a short
+                    instruction, and every primitive (noul included) read out as a letter.
+                    Compact JSON keeps the model's attention on the content and avoids the
+                    stylistic pull of a "Yes"/"No" answer token.
+    """
 
     chat: bool = True  # ChatML wrapping (Qwen instruct); False = plain text (base models)
     no_think: bool = True  # Qwen3 hybrid models: emit empty <think> block to skip reasoning
     system_prompt: str = SYSTEM_PROMPT
+    style: str = "markdown"
+
+    def __post_init__(self):
+        if self.style not in ("markdown", "compact"):
+            raise ValueError(f"unknown prompt style {self.style!r}")
+        if self.style == "compact" and self.system_prompt == SYSTEM_PROMPT:
+            self.system_prompt = COMPACT_SYSTEM_PROMPT
 
     def prefix(self, state: Text) -> str:
-        body = f"# State\n{render_text(state)}\n\n"
+        if self.style == "compact":
+            # the state is the first member of the JSON payload; branches close the object
+            body = '{"state": ' + json.dumps(state, ensure_ascii=False) + ", "
+        else:
+            body = f"# State\n{render_text(state)}\n\n"
         if not self.chat:
             return f"{self.system_prompt}\n\n{body}"
         return f"<|im_start|>system\n{self.system_prompt}<|im_end|>\n<|im_start|>user\n{body}"
@@ -100,6 +126,15 @@ def _options_block(instructions: Text, labelled: list[tuple[str, str]], ask: str
     return "\n".join(lines)
 
 
+def _compact_body(instructions: Text, labelled: list[tuple[str, str]]) -> str:
+    """Close the JSON object opened by the compact prefix: question + lettered options."""
+    payload = {
+        "question": instructions,
+        "options": [{"letter": lab, "text": desc} for lab, desc in labelled],
+    }
+    return json.dumps(payload, ensure_ascii=False)[1:]  # drop "{": the prefix opened it
+
+
 def build_branches(
     qid: str,
     q: NoulQuestion | ChoiceQuestion | ScoreQuestion,
@@ -109,6 +144,8 @@ def build_branches(
 ) -> list[Branch]:
     """Build 1..permutations branches for a question. Noul is never permuted."""
     rng = rng or random.Random(0)
+    if fmt.style == "compact":
+        return _build_compact(qid, q, fmt, permutations, rng)
 
     if isinstance(q, NoulQuestion):
         t = render_text(q.criteria.true) if q.criteria else ""
@@ -144,4 +181,51 @@ def build_branches(
         labelled = [(lab, desc_of(k)) for lab, k in zip(labels, order)]
         body = _options_block(q.instructions, labelled, ask)
         out.append(Branch(qid, kind, fmt.branch(body), labels, order))
+    return out
+
+
+def _build_compact(
+    qid, q, fmt: PromptFormat, permutations: int, rng: random.Random
+) -> list[Branch]:
+    """Compact style: every primitive is a lettered option list inside the JSON payload."""
+    if isinstance(q, NoulQuestion):
+        t = render_text(q.criteria.true) if q.criteria else ""
+        f = render_text(q.criteria.false) if q.criteria else ""
+        labelled = [
+            ("A", "yes: " + (t or "the statement holds")),
+            ("B", "no: " + (f or "the statement does not hold")),
+        ]
+        return [
+            Branch(
+                qid,
+                "noul",
+                fmt.branch(_compact_body(q.instructions, labelled)),
+                ["A", "B"],
+                [True, False],
+            )
+        ]
+    if isinstance(q, ChoiceQuestion):
+        keys = list(q.criteria.keys())
+        kind = "choice"
+
+        def desc_of(k):
+            d = render_text(q.criteria[k]) if q.criteria[k] is not None else ""
+            return f"{k}: {d}" if d else k
+    else:
+        keys = list(range(len(q.criteria)))
+        kind = "score"
+
+        def desc_of(k):
+            return f"level {k} of {len(keys) - 1}: {render_text(q.criteria[k])}"
+
+    out: list[Branch] = []
+    for p in range(permutations):
+        order = list(keys)
+        if p > 0:
+            rng.shuffle(order)
+        labels = [LETTERS[i] for i in range(len(order))]
+        labelled = [(lab, desc_of(k)) for lab, k in zip(labels, order, strict=True)]
+        out.append(
+            Branch(qid, kind, fmt.branch(_compact_body(q.instructions, labelled)), labels, order)
+        )
     return out
