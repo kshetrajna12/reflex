@@ -64,23 +64,46 @@ def scoring_loss(logits: torch.Tensor, target: torch.Tensor, kind: str) -> torch
 # ------------------------------------------------------------------------------- eval
 
 
-def evaluate(engine, exs: list[Example], temperature: float = 1.0) -> dict[str, str]:
-    """Calibration report overall and per source. Returns {name: report text}."""
-    log.info("evaluating %d examples", len(exs))
-    rows = engine.label_logits_batch([(e.state, e.branch) for e in exs])
-    K = max(len(r) for r in rows)
-    logits = np.full((len(rows), K), -1e9)
-    for i, r in enumerate(rows):
-        logits[i, : len(r)] = r
+def fidelity(probs: np.ndarray, targets: np.ndarray) -> float:
+    """1 - mean total-variation distance between predicted and target distributions.
+    The right metric for soft-label sources, where top-label ECE is misleading: a model
+    that honestly answers "60 %" on an item whose true frequency is 60 % is *right*
+    every time, so its ECE reads 0.4 by construction."""
+    return float(1.0 - 0.5 * np.abs(probs - targets).sum(1).mean())
+
+
+def evaluate(engine, exs: list[Example], temperature: float = 1.0, logits=None):
+    """Calibration report overall and per source. Returns ({name: text}, logits, labels).
+    Pass `logits` to re-score without a forward pass (e.g. at another temperature)."""
+    if logits is None:
+        log.info("evaluating %d examples", len(exs))
+        rows = engine.label_logits_batch([(e.state, e.branch) for e in exs])
+        K = max(len(r) for r in rows)
+        logits = np.full((len(rows), K), -1e9)
+        for i, r in enumerate(rows):
+            logits[i, : len(r)] = r
+    K = logits.shape[1]
     labels = np.array([e.hard_label for e in exs])
+    targets = np.zeros((len(exs), K))
+    for i, e in enumerate(exs):
+        targets[i, : len(e.target)] = e.target
     probs = np.stack([softmax(r, temperature) for r in logits])
-    out = {"all": str(report(probs, labels))}
+    soft = np.array([e.target.max() < 0.999 for e in exs])
+
+    def line(idx):
+        text = str(report(probs[idx], labels[idx]))
+        if soft[idx].any():  # add fidelity for sources with soft labels
+            fid = fidelity(probs[idx][soft[idx]], targets[idx][soft[idx]])
+            head, *rest = text.splitlines()
+            text = "\n".join([f"{head}  fidelity={fid:.4f}", *rest])
+        return text
+
+    out = {"all": line(np.arange(len(exs)))}
     by_src = defaultdict(list)
     for i, e in enumerate(exs):
         by_src[e.source or "?"].append(i)
     for src, idx in sorted(by_src.items()):
-        idx = np.array(idx)
-        out[src] = str(report(probs[idx], labels[idx]))
+        out[src] = line(np.array(idx))
     return out, logits, labels
 
 
@@ -215,7 +238,8 @@ def train(args):
         reports, logits, labels = evaluate(engine, val_ex)
         print_reports("after training", reports)
         T = fit_temperature(logits, labels)
-        reports_t, _, _ = evaluate(engine, val_ex, temperature=T)
+        reports_t, _, _ = evaluate(engine, val_ex, temperature=T, logits=logits)
+        np.savez(out / "eval_logits.npz", logits=logits, labels=labels)  # re-score offline
         print_reports(f"after training + temperature T={T:.3f}", reports_t)
         with open(out / "calibration.json", "w") as f:
             json.dump({"temperature": {"noul": T, "choice": T, "score": T}}, f, indent=2)
