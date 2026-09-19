@@ -138,7 +138,9 @@ def train(args):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     log.info("args: %s", vars(args))
 
-    engine = Engine.load(args.model, max_pack_tokens=args.max_pack_tokens)
+    engine = Engine.load(
+        args.model, max_pack_tokens=args.max_pack_tokens, prompt_style=args.prompt_style
+    )
     train_ex = examples(args.data, engine.fmt, permutations=args.permutations, seed=args.seed)
     val_ex = examples(args.val, engine.fmt) if args.val else []
     log.info("%d training examples, %d val examples", len(train_ex), len(val_ex))
@@ -315,6 +317,7 @@ def evaluate_adapter(args):
         adapter_path=args.adapter,
         calibration_path=args.calibration,
         max_pack_tokens=args.max_pack_tokens,
+        prompt_style=args.prompt_style,
     )
     exs = examples(args.val, engine.fmt)
     reports, logits, labels = evaluate(engine, exs)
@@ -340,7 +343,10 @@ def refit(args):
     from reflex.engine import Engine
 
     engine = Engine.load(
-        args.model, adapter_path=args.adapter, max_pack_tokens=args.max_pack_tokens
+        args.model,
+        adapter_path=args.adapter,
+        max_pack_tokens=args.max_pack_tokens,
+        prompt_style=args.prompt_style,
     )
     val_ex = examples(args.val, engine.fmt)
     reports, logits, labels = evaluate(engine, val_ex)
@@ -363,6 +369,7 @@ def main(argv=None):
     ev.add_argument("--val", required=True)
     ev.add_argument("--dump", default=None, help="save per-item logits to this .npz")
     ev.add_argument("--max-pack-tokens", type=int, default=4096)
+    ev.add_argument("--prompt-style", default="markdown", choices=["markdown", "compact"])
 
     r = sub.add_parser(
         "refit",
@@ -375,6 +382,7 @@ def main(argv=None):
         "--out", default=None, help="where to write calibration.json (default: the adapter dir)"
     )
     r.add_argument("--max-pack-tokens", type=int, default=4096)
+    r.add_argument("--prompt-style", default="markdown", choices=["markdown", "compact"])
 
     m = sub.add_parser("make-mmlu", help="write MMLU as reflex training JSONL")
     m.add_argument("--out", required=True)
@@ -400,6 +408,7 @@ def main(argv=None):
     t.add_argument("--grad-checkpoint", action="store_true")
     t.add_argument("--permutations", type=int, default=1, help="option-order augmentation")
     t.add_argument("--max-pack-tokens", type=int, default=4096)
+    t.add_argument("--prompt-style", default="markdown", choices=["markdown", "compact"])
     t.add_argument("--seed", type=int, default=0)
     t.add_argument("--log-every", type=int, default=10)
 
