@@ -1,4 +1,4 @@
-# reflex on JevBench v1.2 (public items only, unofficial, not submitted)
+# reflex on JevBench v1.2 (public items only, unofficial self-run; official run requested 2026-09-19)
 
 [JevBench](https://github.com/fstandhartinger/jevbench) is Benchmark Heaven's benchmark for
 Jev-class decision models. Its `typesafe` adapter speaks the same `/v1/systemone` wire
@@ -26,16 +26,23 @@ Reproduce:
 | GPT-5.6 Luna / DeepSeek V4.1 Flash (chat models, verbalized probabilities) | 1.000 | 0.972 / 0.986 | 0.964 |
 | Jev 1.13.0 (TypeSafe, proprietary) | 1.000 | 0.986 | 0.730 |
 | SemIf (Qwen3.5-4B) | 1.000 | 0.986 | 0.613 |
-| **reflex (Qwen3.5-4B + LoRA, this run)** | **1.000** | **0.931** | **0.595** |
+| **reflex mix3 (Qwen3.5-4B + LoRA, the published adapter)** | **1.000** | **0.944** | **0.604** |
+| reflex mix2 | 1.000 | 0.972 | 0.541 |
+| reflex mix1 | 1.000 | 0.931 | 0.595 |
 | open-alternative-jev (Qwen3.5-4B) | 1.000 | 0.833 | 0.568 |
 | system-one-open (Gemma 4 E2B LoRA) | 1.000 | 0.931 | 0.486 |
+| decider-2b (Qwen3.5-2B, self-reported in its bench request) | 1.000 | 0.847 | 0.459 |
 
-reflex, other measurements: schema validity 100 %, 0 failed requests; ECE 0.011 (easy),
-0.092 (standard), 0.125 (hard); paraphrase consistency 0.972 on the 36 standard pairs;
-distribution fidelity on the 10 public probability items 0.662 (1 - mean total variation);
-latency p50 0.12 s / p95 0.79 s measured on localhost (the benchmark measures from
-Germany and adjusts self-hosted endpoints ×2 + 0.15 s, so these are not comparable to
-the published Speed axis).
+reflex mix3, other measurements: schema validity 100 %, 0 failed requests; ECE 0.025 (easy),
+0.033 (standard), 0.117 (hard); distribution fidelity on the 10 public probability items
+0.689; calibration axis on public hard items ≈ 72.7 (mix1 70.6, mix2 68.2). Latency p50
+0.12 s / p95 0.78 s on localhost (not comparable to the published Speed axis, which is
+measured from Germany and adjusted ×2 + 0.15 s for self-hosted endpoints).
+
+The three adapters and the public 231 were used as a development gate four times (mix1,
+mix2, mix2 with refit temperatures, mix3); recipes were designed after seeing which public
+families the raw model failed. No benchmark item was used in training (8-gram overlap
+check, 0 rows). Expect held-out hard items to score somewhat below the public ones.
 
 ## What the misses are
 

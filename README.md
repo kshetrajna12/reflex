@@ -226,6 +226,15 @@ The [browser demo](https://kshetrajna12.github.io/reflex/) has the same triage a
 bottom of the page: it fetches a public PR from the GitHub API and runs it on the 0.8B
 model on your GPU. Expect a rougher ordering than the 4B; it is the same questions.
 
+## How it compares
+
+On the public items of [JevBench](https://github.com/fstandhartinger/jevbench), a
+benchmark for Jev-class decision models, the published adapter scores 1.000 / 0.944 / 0.604
+on the easy / standard / hard tiers, against 1.000 / 0.986 / 0.730 for Jev itself and
+1.000 / 0.986 / 0.613 for the strongest other open 4B rebuild, on the same items. That
+is our own run; an official run has been requested. Details, caveats and what the misses
+are: [docs/results/jevbench-public.md](docs/results/jevbench-public.md).
+
 ## How it works, in one paragraph
 
 The state is run through the model once and its internal cache is kept. Every question is
