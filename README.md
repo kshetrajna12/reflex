@@ -176,6 +176,18 @@ uv run reflex-calibrate train --data runs/mix_train.jsonl --val runs/mix_eval.js
 uv run reflex-serve --adapter runs/lora-mix --calibration runs/lora-mix/calibration.json
 ```
 
+What one epoch of that bought on Qwen3.5-4B (held-out, 200 items per source):
+
+| | accuracy | calibration error (ECE) |
+|---|---|---|
+| raw model | 62.7 % | 0.120 |
+| after LoRA | 76.8 % | 0.051 |
+| after LoRA + temperature | 76.8 % | **0.024** |
+
+Toxicity went from 50 % to 94 %, hallucination checks from 78 % to 99 %, code-review
+"needs a comment" from 50 % to 74 %. Per-source numbers and caveats are in
+[docs/results/lora-mix-qwen3.5-4b.md](docs/results/lora-mix-qwen3.5-4b.md).
+
 Training is LoRA by default: minutes on one GPU, base model untouched. `--full` updates
 every weight instead, which fits a 4B model on a large GPU but rarely helps for a few
 thousand examples. The trainer prints accuracy and calibration per source before and

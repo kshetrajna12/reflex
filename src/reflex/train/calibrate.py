@@ -107,7 +107,9 @@ def train(args):
 
     # ---- which weights to train
     if args.full:
-        model = engine.model
+        # fp32 master weights: bf16 cannot represent the tiny updates a 1e-5 step makes.
+        # A 4B model then needs ~64 GB (weights + grads + Adam) plus activations.
+        model = engine.model.float()
         for p in model.parameters():
             p.requires_grad_(True)
     else:
@@ -136,17 +138,24 @@ def train(args):
             p.data = p.data.float()
     opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=0.0)
 
-    n_batches = sum(1 for _ in engine.iter_batches([(e.state, e.branch) for e in train_ex]))
-    total_steps = math.ceil(n_batches * args.epochs / args.accum)
+    # Batch boundaries depend on example order, so fix the order of every epoch up front
+    # and count the batches exactly; otherwise the LR schedule can end early or late.
+    rng = random.Random(args.seed)
+    epochs: list[list[Example]] = []
+    for _ in range(args.epochs):
+        rng.shuffle(train_ex)
+        epochs.append(list(train_ex))
+    n_batches = sum(
+        sum(1 for _ in engine.iter_batches([(e.state, e.branch) for e in ep])) for ep in epochs
+    )
+    total_steps = math.ceil(n_batches / args.accum)
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt,
         lambda s: min(1.0, (s + 1) / max(1, args.warmup)) * max(0.0, 1 - s / max(1, total_steps)),
     )
 
     step, t0 = 0, time.perf_counter()
-    rng = random.Random(args.seed)
-    for epoch in range(args.epochs):
-        rng.shuffle(train_ex)
+    for epoch, train_ex in enumerate(epochs):
         model.train()
         running = []
         for micro, (idx, batch) in enumerate(
