@@ -22,6 +22,7 @@ Sources (all on the Hugging Face hub):
     adequacy_synth    request + response -> satisfies exactly?      noul
     rule_routing_synth  request + stated policy -> specialist       choice
     base_rates_synth  stated outcome counts -> outcome              choice*
+    policy_synth      long policy document + case -> outcome        choice
   * soft label
 """
 
@@ -661,6 +662,224 @@ def write(rows: Iterable[dict], path: str) -> int:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
             n += 1
     return n
+
+
+# ------------------------------------------------ long policy documents (synthetic)
+# The hardest family on external decision sets is "apply a 2-3k-token policy with many
+# numbered rules, thresholds, exclusions and a precedence order to a concrete case".
+# This generator writes such a policy from templates, a case with concrete attributes,
+# and computes the outcome in code by evaluating the rules in order, so the label is
+# correct by construction and the state is genuinely long.
+
+_POLICY_DOMAINS = {
+    "expense_reimbursement": {
+        "attrs": {
+            "amount": (5, 4000),
+            "days_since": (0, 120),
+            "category": ["travel", "meals", "equipment", "software", "training", "entertainment"],
+            "receipt": [True, False],
+            "manager_approved": [True, False],
+            "employee_level": ["junior", "senior", "director"],
+        },
+        "outcomes": [
+            "reimburse_in_full",
+            "reimburse_capped",
+            "reject_missing_receipt",
+            "reject_late_claim",
+            "reject_excluded_category",
+            "escalate_to_finance",
+        ],
+    },
+    "insurance_claim": {
+        "attrs": {
+            "amount": (100, 25000),
+            "days_since": (0, 400),
+            "category": ["water_damage", "theft", "fire", "wear_and_tear", "flood", "accidental"],
+            "receipt": [True, False],
+            "manager_approved": [True, False],
+            "employee_level": ["standard", "premium", "platinum"],
+        },
+        "outcomes": [
+            "pay_in_full",
+            "pay_capped",
+            "deny_no_documentation",
+            "deny_late_notice",
+            "deny_excluded_peril",
+            "refer_to_adjuster",
+        ],
+    },
+    "access_request": {
+        "attrs": {
+            "amount": (1, 365),
+            "days_since": (0, 60),
+            "category": [
+                "production_db",
+                "billing_console",
+                "source_repo",
+                "hr_records",
+                "staging",
+                "analytics",
+            ],
+            "receipt": [True, False],
+            "manager_approved": [True, False],
+            "employee_level": ["contractor", "employee", "lead"],
+        },
+        "outcomes": [
+            "grant",
+            "grant_time_limited",
+            "deny_no_ticket",
+            "deny_stale_request",
+            "deny_restricted_system",
+            "route_to_security_review",
+        ],
+    },
+}
+_FILLER = [
+    "Definitions in this section apply throughout unless a clause states otherwise.",
+    "Requests are processed in the order received; processing times are not guaranteed.",
+    "Nothing in this policy creates an entitlement beyond what the applicable clause grants.",
+    "Records are retained for seven years in accordance with the retention schedule.",
+    "Questions about interpretation should be sent to the policy owner listed in Appendix A.",
+    "This policy is reviewed annually; the version date appears in the footer.",
+    "Approvers must not approve their own requests under any circumstances.",
+    "Amounts are stated in the requester's local currency before tax.",
+    "A request may be withdrawn by the requester at any time before a decision is issued.",
+    "Decisions are communicated in writing within five working days of being made.",
+    "Appeals are heard by the committee named in Appendix C and follow the appeals procedure.",
+    "Supporting documents must be legible; illegible documents are treated as not provided.",
+    "The policy owner may publish non-binding guidance notes on the application of this policy.",
+    "Delegations of authority are recorded in the delegation register maintained by the secretariat.",
+    "Where a request spans several categories, the category of the largest component applies.",
+    "Dates are interpreted in the requester's local time zone.",
+    "Verbal approvals are not recognised for the purposes of this policy.",
+    "The secretariat may request additional information; the clock stops until it is received.",
+    "Historic decisions do not bind future decisions on similar requests.",
+    "Confidential information in a request is handled under the information-handling standard.",
+    "A request is filed on the date it is received by the secretariat, not the date it is sent.",
+    "Training on this policy is mandatory for approvers and is refreshed every two years.",
+]
+
+
+def _policy(rng, dom):
+    """Return (policy_text, decide(case) -> outcome). Rules are checked in clause order."""
+    o = dom["outcomes"]
+    cap = rng.choice([250, 500, 1000, 2500])
+    late = rng.choice([30, 45, 60, 90])
+    excluded = rng.sample(dom["attrs"]["category"], 2)
+    big = rng.choice([1500, 3000, 5000, 10000])
+    senior = dom["attrs"]["employee_level"][-1]
+    limited = rng.choice([90, 180])
+    clauses = [
+        (
+            f"A request older than {late} days at the time of filing is refused as late.",
+            lambda c: o[3] if c["days_since"] > late else None,
+        ),
+        (
+            f"Requests in the categories {excluded[0]} and {excluded[1]} are excluded and refused, regardless of amount or approval.",
+            lambda c: o[4] if c["category"] in excluded else None,
+        ),
+        (
+            "A request without supporting documentation is refused, unless the requester holds the "
+            f"{senior} level, in which case documentation may follow within 10 days.",
+            lambda c: o[2] if (not c["receipt"] and c["employee_level"] != senior) else None,
+        ),
+        (
+            f"Any request above {big} must be referred for a second review; it is neither granted nor refused at this stage.",
+            lambda c: o[5] if c["amount"] > big else None,
+        ),
+        (
+            f"Requests above {cap} that carry manager approval are granted up to the cap of {cap}.",
+            lambda c: o[1] if (c["amount"] > cap and c["manager_approved"]) else None,
+        ),
+        (
+            f"Requests above {cap} without manager approval are referred for a second review.",
+            lambda c: o[5] if (c["amount"] > cap and not c["manager_approved"]) else None,
+        ),
+        (
+            "All remaining requests are granted in full."
+            + (
+                f" For the {dom['attrs']['employee_level'][0]} level the grant is limited to {limited} days."
+                if "grant" in o[0]
+                else ""
+            ),
+            lambda c: (
+                o[1]
+                if ("grant" in o[0] and c["employee_level"] == dom["attrs"]["employee_level"][0])
+                else o[0]
+            ),
+        ),
+    ]
+    order = list(range(len(clauses)))
+    # keep the deciding order but interleave filler and re-number so the document reads like a real policy
+    lines = [
+        f"POLICY {rng.randint(100, 999)}: {rng.choice(['Handling of', 'Rules for', 'Procedure for'])} {list(_POLICY_DOMAINS).index(next(k for k, v in _POLICY_DOMAINS.items() if v is dom)) + 1}.0 requests\n"
+    ]
+    n = 1
+    for i in order:
+        for _ in range(rng.randint(1, 3)):
+            lines.append(f"{n}. {rng.choice(_FILLER)}")
+            n += 1
+        lines.append(f"{n}. {clauses[i][0]}")
+        n += 1
+    lines.append(
+        f"{n}. Clauses are applied in numerical order; the first clause whose condition is met decides the request."
+    )
+    text = "\n".join(lines)
+
+    def decide(c):
+        for _, rule in clauses:
+            r = rule(c)
+            if r:
+                return r
+        return o[0]
+
+    return text, decide
+
+
+def policy_synth(n: int, seed: int, split: str) -> Iterator[dict]:
+    """Long policy application: a 1.5-3k-token policy document plus a concrete case;
+    the outcome is computed by applying the clauses in order. Labels: choice, hard."""
+    rng = random.Random(seed + (0 if split == "train" else 7919))
+    counts: dict[str, int] = {}
+    made = 0
+    while made < n:
+        name = rng.choice(list(_POLICY_DOMAINS))
+        dom = _POLICY_DOMAINS[name]
+        text, decide = _policy(rng, dom)
+        a = dom["attrs"]
+        case = {
+            "amount": rng.randint(*a["amount"]),
+            "days_since": rng.randint(0, 100),
+            "category": rng.choice(a["category"]),
+            "receipt": rng.random() < 0.75,
+            "manager_approved": rng.choice(a["manager_approved"]),
+            "employee_level": rng.choice(a["employee_level"]),
+        }
+        outcome = decide(case)
+        # rejection sampling keeps the six outcomes roughly balanced
+        if counts.get(outcome, 0) > min([counts.get(o, 0) for o in dom["outcomes"]]) + 2:
+            continue
+        counts[outcome] = counts.get(outcome, 0) + 1
+        made += 1
+        # appendix of notes so states reach roughly 1.5-3k tokens
+        pad = "\n".join(f"Note {i + 1}: {rng.choice(_FILLER)}" for i in range(rng.randint(40, 90)))
+        yield {
+            "state": {
+                "policy_document": text + "\n\nAppendix B: general notes\n" + pad,
+                "request": case,
+            },
+            "questions": {
+                "outcome": _choice(
+                    "Applying the `policy_document` to the `request`, what is the correct outcome? Apply clauses in numerical order; the first clause whose condition holds decides.",
+                    {o: None for o in dom["outcomes"]},
+                )
+            },
+            "labels": {"outcome": outcome},
+            "source": "policy_synth",
+        }
+
+
+RECIPES["policy_synth"] = policy_synth
 
 
 def parse_counts(spec: str, default: int) -> dict[str, int]:
