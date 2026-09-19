@@ -123,7 +123,7 @@ def mmlu_pro(n: int, seed: int, split: str) -> Iterator[dict]:
     # MMLU-Pro's own validation split is only 70 rows: split its 12k test rows 80/20 instead
     ds = _shuffled(load_dataset("TIGER-Lab/MMLU-Pro", split="test"), 12345)
     cut = len(ds) * 8 // 10
-    ds = ds.select(range(0, cut)) if split == "train" else ds.select(range(cut, len(ds)))
+    ds = ds.select(range(cut)) if split == "train" else ds.select(range(cut, len(ds)))
     for row in _shuffled(ds, seed).select(range(min(n, len(ds)))):
         opts = [str(o).strip() or "(blank)" for o in row["options"]]
         seen: dict[str, int] = {}
