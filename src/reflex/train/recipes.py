@@ -27,6 +27,11 @@ Sources (all on the Hugging Face hub):
     civil_soft        comment -> 5 toxicity dimensions              noul*    CC0
     helpsteer2_multi  response -> 4 rated dimensions                score*   CC-BY-4.0
     go_emotions_soft  comment -> 6 emotions, rater fractions        noul*    Apache-2.0
+    measuring_hate_speech  comment -> 6 ordinal dims + hate?      score*/noul*  CC-BY-4.0
+    unli              premise+hypothesis -> human probability      noul*    MIT
+    chaos_mnli        premise+hypothesis -> 100-rater e/n/c dist   choice*  (ChaosNLI)
+    helpsteer3_pref   two replies -> annotator preference fractions choice*  CC-BY-4.0
+    tool_routing      request + 2-8 tools -> tool or none           choice   CC-BY-4.0 (xLAM)
   external test sets (`reflex-data external`, never in `mix`): bitext_support, toxic_chat,
   mnli_mismatched, yelp_stars
   * soft label
@@ -35,6 +40,7 @@ Sources (all on the Hugging Face hub):
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import random
 from collections.abc import Iterable, Iterator
@@ -1199,6 +1205,243 @@ EXTERNAL = {
     "mnli_mismatched": mnli_mismatched,
     "yelp_stars": yelp_stars,
 }
+
+# ------------------------------------------------- soft labels, round two (scout picks)
+
+
+_MHS_DIMS = {
+    "sentiment": "How negative is the sentiment of the comment?",
+    "respect": "How disrespectful is the comment toward its target?",
+    "insult": "How insulting is the comment?",
+    "humiliate": "How humiliating is the comment toward its target?",
+    "dehumanize": "How much does the comment dehumanize its target?",
+    "violence": "How much does the comment call for or endorse violence?",
+}
+_MHS_LEVELS = ["not at all", "slightly", "moderately", "strongly", "extremely"]
+
+
+def measuring_hate_speech(n: int, seed: int, split: str) -> Iterator[dict]:
+    """Measuring Hate Speech (UC Berkeley D-Lab): ~3-4 raters per comment score ten
+    ordinal dimensions 0-4. Six of them become soft Score questions with per-level rater
+    fractions, plus a soft noul for 'is this hate speech'. CC BY 4.0."""
+    from collections import defaultdict
+
+    from datasets import load_dataset
+
+    ds = load_dataset("ucberkeley-dlab/measuring-hate-speech", split="train")
+    by: dict[str, list] = defaultdict(list)
+    for row in ds.select(range(min(len(ds), 60000))):
+        by[str(row["comment_id"])].append(row)
+    ids = sorted(i for i, rs in by.items() if len(rs) >= 3)
+    rng = random.Random(seed + 21)
+    rng.shuffle(ids)
+    cut = len(ids) * 9 // 10
+    ids = ids[:cut] if split == "train" else ids[cut:]
+    count = 0
+    for i in ids:
+        rs = by[i]
+        labels, questions = {}, {}
+        for dim, q in _MHS_DIMS.items():
+            votes = [int(r[dim]) for r in rs if r[dim] is not None]
+            if len(votes) >= 2:
+                labels[dim] = [votes.count(k) / len(votes) for k in range(5)]
+                questions[dim] = _score(q, _MHS_LEVELS)
+        hs = [r["hatespeech"] for r in rs if r["hatespeech"] is not None]
+        if hs:
+            labels["hate_speech"] = round(sum(1 for v in hs if int(v) == 2) / len(hs), 4)
+            questions["hate_speech"] = _noul(
+                "Is this comment hate speech (attacks people for a protected characteristic)?"
+            )
+        if len(labels) < 3:
+            continue
+        yield {
+            "state": {"comment": rs[0]["text"], "raters": len(rs)},
+            "questions": questions,
+            "labels": labels,
+            "source": "measuring_hate_speech",
+        }
+        count += 1
+        if count >= n:
+            return
+
+
+def unli(n: int, seed: int, split: str) -> Iterator[dict]:
+    """UNLI: SNLI pairs re-annotated with a human probability that the hypothesis is
+    true given the premise. The cleanest probability target on the hub. MIT."""
+    from datasets import load_dataset
+
+    ds = load_dataset("Zhengping/UNLI", split="train" if split == "train" else "validation")
+    for row in _shuffled(ds, seed + 22).select(range(min(n, len(ds)))):
+        yield {
+            "state": {"premise": row["premise"], "hypothesis": row["hypothesis"]},
+            "questions": {
+                "true": _noul(
+                    "Given the `premise`, how likely is it that the `hypothesis` is true? Answer with that probability."
+                )
+            },
+            "labels": {"true": round(float(row["label"]), 4)},
+            "source": "unli",
+        }
+
+
+def chaos_mnli(n: int, seed: int, split: str) -> Iterator[dict]:
+    """ChaosNLI (MNLI part): 100 raters per pair -> a distribution over entailment /
+    neutral / contradiction. Pairs that also appear in the external MNLI test set are
+    dropped."""
+    from datasets import load_dataset
+
+    ext = set()
+    try:
+        for row in read_jsonl_any("runs/external_eval.jsonl"):
+            st = row.get("state") or {}
+            if isinstance(st, dict) and "premise" in st:
+                ext.add((st["premise"].strip(), st["hypothesis"].strip()))
+    except FileNotFoundError:
+        pass
+    ds = load_dataset("metaeval/chaos-mnli-ambiguity", split="train")
+    rows = [r for r in ds if (r["premise"].strip(), r["hypothesis"].strip()) not in ext]
+    rng = random.Random(seed + 23)
+    rng.shuffle(rows)
+    cut = len(rows) * 85 // 100
+    rows = rows[:cut] if split == "train" else rows[cut:]
+    for row in rows[:n]:
+        dist = (
+            row["label_dist"]
+            if isinstance(row["label_dist"], list)
+            else json.loads(row["label_dist"])
+        )
+        dist = [float(v) for v in dist]  # ChaosNLI order: entailment, neutral, contradiction
+        yield {
+            "state": {"premise": row["premise"], "hypothesis": row["hypothesis"]},
+            "questions": {
+                "relation": _choice(
+                    "Given the `premise`, is the `hypothesis` entailed, neutral, or contradicted? Answer with the distribution a large group of careful readers would give.",
+                    {
+                        "entailment": "the premise implies the hypothesis",
+                        "neutral": "the premise neither implies nor contradicts it",
+                        "contradiction": "the premise rules it out",
+                    },
+                )
+            },
+            "labels": {
+                "relation": dict(zip(["entailment", "neutral", "contradiction"], dist, strict=True))
+            },
+            "source": "chaos_mnli",
+        }
+
+
+def helpsteer3_pref(n: int, seed: int, split: str) -> Iterator[dict]:
+    """HelpSteer3 preference: several annotators each score response1 vs response2 on
+    -3..3. Sign -> which is better; the annotator fractions are the soft target."""
+    from datasets import load_dataset
+
+    ds = load_dataset(
+        "nvidia/HelpSteer3", "preference", split="train" if split == "train" else "validation"
+    )
+    count = 0
+    for row in _shuffled(ds, seed + 24):
+        prefs = row["individual_preference"]
+        if isinstance(prefs, str):
+            try:
+                prefs = json.loads(prefs.replace("'", '"'))
+            except json.JSONDecodeError:
+                continue
+        scores = [
+            int(p.get("score")) for p in prefs if isinstance(p, dict) and p.get("score") is not None
+        ]
+        if len(scores) < 2:
+            continue
+        ctx = row["context"]
+        ctx = ctx if isinstance(ctx, str) else json.dumps(ctx, ensure_ascii=False)
+        dist = {
+            "response_1": sum(1 for s_ in scores if s_ < 0) / len(scores),
+            "tie": sum(1 for s_ in scores if s_ == 0) / len(scores),
+            "response_2": sum(1 for s_ in scores if s_ > 0) / len(scores),
+        }
+        yield {
+            "state": {
+                "conversation": ctx[-3000:],
+                "response_1": row["response1"][-2500:],
+                "response_2": row["response2"][-2500:],
+            },
+            "questions": {
+                "better": _choice(
+                    "Which response is the better final reply to the `conversation`?",
+                    {
+                        "response_1": "response_1 is clearly better",
+                        "tie": "about equally good",
+                        "response_2": "response_2 is clearly better",
+                    },
+                )
+            },
+            "labels": {"better": dist},
+            "source": "helpsteer3_pref",
+        }
+        count += 1
+        if count >= n:
+            return
+
+
+RECIPES.update(
+    {
+        "measuring_hate_speech": measuring_hate_speech,
+        "unli": unli,
+        "chaos_mnli": chaos_mnli,
+        "helpsteer3_pref": helpsteer3_pref,
+    }
+)
+
+
+def tool_routing(n: int, seed: int, split: str) -> Iterator[dict]:
+    """Function-calling as routing: the query and 2-8 named tools with descriptions; the
+    answer is the tool that should be called, or 'none of these' (from the xLAM
+    irrelevance set, where no listed tool applies). Both CC BY 4.0."""
+    from datasets import load_dataset
+
+    rel = load_dataset("lockon/xlam-function-calling-60k", "dataset", split="train")
+    irr = load_dataset("MadeAgents/xlam-irrelevance-7.5k", split="train")
+    rng = random.Random(seed + 25)
+
+    def rows_of(ds, has_answer):
+        for row in _shuffled(ds, seed + 25):
+            try:
+                tools = json.loads(row["tools"]) if isinstance(row["tools"], str) else row["tools"]
+                answers = (
+                    json.loads(row["answers"])
+                    if isinstance(row["answers"], str)
+                    else row["answers"]
+                )
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(tools, list) or not 2 <= len(tools) <= 8:
+                continue
+            names = [t.get("name") for t in tools if isinstance(t, dict) and t.get("name")]
+            if len(names) != len(tools) or len(set(names)) != len(names):
+                continue
+            gold = answers[0].get("name") if (has_answer and answers) else None
+            if has_answer and gold not in names:
+                continue
+            yield row["query"], tools, gold
+
+    src = list(itertools.islice(rows_of(rel, True), n * 3 // 4))
+    src += list(itertools.islice(rows_of(irr, False), n - n * 3 // 4))
+    rng.shuffle(src)
+    cut = len(src) * 9 // 10
+    src = src[:cut] if split == "train" else src[cut:]
+    for query, tools, gold in src:
+        opts = {t["name"]: (t.get("description") or "")[:200] for t in tools}
+        opts["none of these"] = "no listed tool answers the request"
+        yield {
+            "state": {"request": query},
+            "questions": {
+                "tool": _choice("Which tool should be called to handle the `request`?", opts)
+            },
+            "labels": {"tool": gold or "none of these"},
+            "source": "tool_routing",
+        }
+
+
+RECIPES["tool_routing"] = tool_routing
 
 
 def parse_counts(spec: str, default: int) -> dict[str, int]:
