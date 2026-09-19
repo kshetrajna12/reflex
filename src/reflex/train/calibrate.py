@@ -106,6 +106,8 @@ def train(args):
     fh = logging.FileHandler(out_dir / "train.log")
     fh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     logging.getLogger().addHandler(fh)
+    for noisy in ("httpx", "httpcore", "urllib3", "filelock", "fla.utils"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     log.info("args: %s", vars(args))
 
     engine = Engine.load(args.model, max_pack_tokens=args.max_pack_tokens)
