@@ -16,7 +16,12 @@ Sources (all on the Hugging Face hub):
     halueval          question + answer -> hallucinated?            noul     Apache-2.0
     msmarco           query + passage -> answers the query?         noul     MS research
     helpsteer2        prompt + response -> helpfulness 0..4         score    CC-BY-4.0
+    helpsteer2_soft   same, but the raters' score distribution      score*   CC-BY-4.0
     codereview        diff chunk -> needs a reviewer? + issue type  noul/choice  "other"
+  synthetic, correct by construction (see the bottom of this file):
+    adequacy_synth    request + response -> satisfies exactly?      noul
+    rule_routing_synth  request + stated policy -> specialist       choice
+    base_rates_synth  stated outcome counts -> outcome              choice*
   * soft label
 """
 
@@ -329,6 +334,327 @@ RECIPES = {
     "codereview": codereview,
 }
 
+# ------------------------------------------------------------------ synthetic recipes
+# Verifiable data you can make with code. Each generator builds a state, a question and a
+# label that is correct BY CONSTRUCTION (a checker function, a stated rule, or stated
+# frequencies), so the model learns a *skill* rather than a dataset. These target the
+# failure shapes seen on JevBench's public items without touching any benchmark item.
+
+_WORDS = [
+    "apple",
+    "river",
+    "stone",
+    "cloud",
+    "lantern",
+    "harbor",
+    "meadow",
+    "copper",
+    "velvet",
+    "signal",
+    "orbit",
+    "maple",
+    "ember",
+    "canyon",
+    "ledger",
+]
+_TOPICS = [
+    "the weather in Lisbon",
+    "how to boil an egg",
+    "why the sky is blue",
+    "our refund policy",
+    "the history of chess",
+    "how to reset a password",
+    "what a mutex is",
+    "the moon landing",
+]
+
+
+def _sentences(rng, n):
+    return " ".join(
+        f"{rng.choice(_WORDS).capitalize()} {rng.choice(_WORDS)} {rng.choice(_WORDS)}."
+        for _ in range(n)
+    )
+
+
+def adequacy_synth(n: int, seed: int, split: str) -> Iterator[dict]:
+    """Judging whether a response satisfies a request EXACTLY. Every template has a
+    programmatic checker; negatives are near-misses (off by one word, right content in
+    the wrong container, a forbidden capital letter), because that is what a judge gets
+    wrong. Labels: noul, hard."""
+    rng = random.Random(seed + (0 if split == "train" else 7919))
+    templates = [
+        # (request builder, satisfying response, near-miss response)
+        lambda r: (
+            (
+                f"Say exactly {k} words.",
+                " ".join(r.sample(_WORDS, k)),
+                " ".join(r.sample(_WORDS, k + r.choice([-1, 1]))),
+            )
+            if (k := r.randint(2, 6))
+            else None
+        ),
+        lambda r: (
+            (
+                f"Return a JSON array containing the integer {v}.",
+                f"[{v}]",
+                r.choice([f'{{"value": {v}}}', f"[{v + 1}]", f'["{v}"]']),
+            )
+            if (v := r.randint(1, 99))
+            else None
+        ),
+        lambda r: (
+            (
+                f"Reply in all lowercase letters about {t}.",
+                _sentences(r, 2).lower(),
+                _sentences(r, 2),
+            )
+            if (t := r.choice(_TOPICS))
+            else None
+        ),
+        lambda r: (
+            (
+                f"Reply in ALL CAPITAL letters about {t}.",
+                _sentences(r, 2).upper(),
+                _sentences(r, 2).capitalize(),
+            )
+            if (t := r.choice(_TOPICS))
+            else None
+        ),
+        lambda r: (
+            (
+                f"Write exactly {k} sentences about {t}.",
+                _sentences(r, k),
+                _sentences(r, k + r.choice([-1, 1])),
+            )
+            if (k := r.randint(1, 4)) and (t := r.choice(_TOPICS))
+            else None
+        ),
+        lambda r: (
+            (
+                f"Answer with only one of: {', '.join(o)}.",
+                r.choice(o),
+                r.choice([f"I think {o[0]}", "maybe", o[0].upper() + "!"]),
+            )
+            if (o := r.sample(["yes", "no", "north", "south", "red", "green", "cat", "dog"], 3))
+            else None
+        ),
+        lambda r: (
+            (
+                f"Include the word '{w}' in your reply about {t}.",
+                _sentences(r, 1) + f" I like {w}.",
+                _sentences(r, 2),
+            )
+            if (w := r.choice(_WORDS)) and (t := r.choice(_TOPICS))
+            else None
+        ),
+        lambda r: (
+            (
+                f"Do not use the word '{w}'. Describe {t} in one sentence.",
+                f"{t.capitalize()} is worth a careful look.",
+                f"The {w} matters when thinking about {t}.",
+            )
+            if (w := r.choice(_WORDS)) and (t := r.choice(_TOPICS))
+            else None
+        ),
+        lambda r: (
+            (
+                f"Reply with a single integer: what is {a} + {b}?",
+                str(a + b),
+                r.choice([str(a + b + 1), f"{a + b}.0", f"The answer is {a + b}"]),
+            )
+            if (a := r.randint(2, 60)) and (b := r.randint(2, 60))
+            else None
+        ),
+        lambda r: (
+            (
+                f"End your reply with the exact phrase '{ph}'.",
+                _sentences(r, 1) + " " + ph,
+                ph + " " + _sentences(r, 1),
+            )
+            if (ph := r.choice(["Thank you.", "Over and out.", "That is all."]))
+            else None
+        ),
+    ]
+    count = 0
+    while count < n:
+        request, good, bad = rng.choice(templates)(rng)
+        for response, ok in ((good, True), (bad, False)):
+            yield {
+                "state": {"request": request, "response": response},
+                "questions": {
+                    "satisfies": _noul(
+                        "Does the `response` fully satisfy the `request`, including every explicit constraint (counts, format, case, wording)?",
+                        "every constraint is met exactly",
+                        "at least one constraint is violated, even slightly",
+                    )
+                },
+                "labels": {"satisfies": ok},
+                "source": "adequacy_synth",
+            }
+            count += 1
+
+
+_SPECIALISTS = {
+    "document": "reading, summarising or extracting from an attached document",
+    "coding": "writing or explaining code",
+    "coding_agent": "editing files in a repository and running tests",
+    "math": "calculations and quantitative reasoning",
+    "search": "looking up current facts on the web",
+    "general": "everything else",
+}
+_REQUESTS = [
+    ("Read the attached contract and list its renewal dates.", "document"),
+    ("Extract every email address from the uploaded PDF.", "document"),
+    ("Summarise the attached meeting notes in three bullets.", "document"),
+    ("Write a Python function that reverses a linked list.", "coding"),
+    ("Explain what this regex does: ^\\d{3}-\\d{4}$", "coding"),
+    ("Fix the failing test in tests/test_auth.py and rerun the suite.", "coding_agent"),
+    (
+        "Rename the function in utils.py and update all call sites, then run the tests.",
+        "coding_agent",
+    ),
+    ("What is 17 % of 3,400?", "math"),
+    ("If a loan of 12,000 is repaid over 36 months at 4 %, what is the monthly payment?", "math"),
+    ("Who won the most recent Formula 1 race?", "search"),
+    ("What is the weather in Oslo right now?", "search"),
+    ("Suggest a name for my new cat.", "general"),
+    ("Write a short toast for my sister's wedding.", "general"),
+]
+_RULES = [
+    (
+        "Any request that mentions an attached or uploaded file goes to `document`, even if it asks for code or numbers.",
+        lambda req, lab: "document" if ("attached" in req or "uploaded" in req) else lab,
+    ),
+    (
+        "File edits with test execution use `coding_agent`, even if the request is code-related.",
+        lambda req, lab: lab,
+    ),
+    (
+        "Questions about current events or live conditions go to `search`; do not answer from memory.",
+        lambda req, lab: lab,
+    ),
+    (
+        "Anything involving money or percentages goes to `math`, even inside a document task.",
+        lambda req, lab: "math" if ("%" in req or "loan" in req or "payment" in req) else lab,
+    ),
+    (
+        "Code explanations (no file changes) go to `coding`; only tasks that change files and run tests go to `coding_agent`.",
+        lambda req, lab: lab,
+    ),
+]
+
+
+def rule_routing_synth(n: int, seed: int, split: str) -> Iterator[dict]:
+    """Routing under a stated policy: the state carries an explicit rule that sometimes
+    overrides the surface cue. Labels: choice, hard, decided by the rule."""
+    rng = random.Random(seed + (0 if split == "train" else 7919))
+    for _ in range(n):
+        req, base = rng.choice(_REQUESTS)
+        rule_text, apply = rng.choice(_RULES)
+        yield {
+            "state": {"routing_policy": rule_text, "request": req},
+            "questions": {
+                "specialist": _choice(
+                    "Choose the specialist for the `request`, following the `routing_policy` when it applies.",
+                    dict(_SPECIALISTS),
+                )
+            },
+            "labels": {"specialist": apply(req, base)},
+            "source": "rule_routing_synth",
+        }
+
+
+_OUTCOMES = [
+    ("support ticket", ["resolved_first_contact", "escalated", "reopened"]),
+    ("delivery", ["on_time", "late", "early"]),
+    ("chargeback dispute", ["merchant_wins", "customer_wins", "customer_withdraws"]),
+    ("appeal", ["upheld", "overturned", "modified"]),
+    ("appointment", ["attended", "late_cancellation", "no_show"]),
+    ("outage", ["bad_push", "upstream_provider", "database_hardware"]),
+]
+
+
+def base_rates_synth(n: int, seed: int, split: str) -> Iterator[dict]:
+    """Reading a probability off stated evidence: the state gives counts of past outcomes
+    for cases like this one; the honest answer is the frequency, not a confident pick.
+    Labels: choice, SOFT (the exact frequencies)."""
+    rng = random.Random(seed + (0 if split == "train" else 7919))
+    for _ in range(n):
+        thing, outcomes = rng.choice(_OUTCOMES)
+        total = rng.choice([20, 40, 50, 80, 100])
+        cuts = sorted(rng.sample(range(1, total), len(outcomes) - 1))
+        counts = [b - a for a, b in zip([0] + cuts, cuts + [total])]
+        rng.shuffle(counts)
+        history = ", ".join(f"{c} were {o.replace('_', ' ')}" for o, c in zip(outcomes, counts))
+        yield {
+            "state": {
+                "case": f"A new {thing} with the same profile as the historical ones below.",
+                "history": f"Of the last {total} similar cases, {history}.",
+            },
+            "questions": {
+                "outcome": _choice(
+                    f"What will the outcome of this {thing} be? Answer with probabilities that reflect the `history`.",
+                    {o: None for o in outcomes},
+                )
+            },
+            "labels": {"outcome": {o: c / total for o, c in zip(outcomes, counts)}},
+            "source": "base_rates_synth",
+        }
+
+
+def helpsteer2_soft(n: int, seed: int, split: str) -> Iterator[dict]:
+    """HelpSteer2's raw per-rater scores (3-5 raters per response) turned into a SOFT
+    distribution over the five helpfulness levels, so disagreement becomes the target."""
+    import gzip
+
+    from huggingface_hub import hf_hub_download
+
+    path = hf_hub_download(
+        "nvidia/HelpSteer2", "disagreements/disagreements.jsonl.gz", repo_type="dataset"
+    )
+    rows = [json.loads(l) for l in gzip.open(path, "rt")]
+    rng = random.Random(seed)
+    rng.shuffle(rows)
+    cut = len(rows) * 9 // 10
+    rows = rows[:cut] if split == "train" else rows[cut:]
+    levels = [
+        "not helpful at all: ignores or misunderstands the request",
+        "slightly helpful: touches the request but mostly misses",
+        "partially helpful: addresses the request with notable gaps",
+        "mostly helpful: addresses the request well with minor gaps",
+        "extremely helpful: complete, correct and well presented",
+    ]
+    count = 0
+    for row in rows:
+        votes = [int(v) for v in row.get("helpfulness") or [] if v is not None]
+        if len(votes) < 2 or len(set(votes)) == 1:
+            continue  # keep the disagreements: that is the point of this recipe
+        dist = [votes.count(i) / len(votes) for i in range(5)]
+        yield {
+            "state": {"prompt": row["prompt"][-4000:], "response": row["response"][-4000:]},
+            "questions": {
+                "helpfulness": _score(
+                    "How helpful is the `response` to the `prompt`? Several raters scored it; answer with the distribution of their scores.",
+                    levels,
+                )
+            },
+            "labels": {"helpfulness": dist},
+            "source": "helpsteer2_soft",
+        }
+        count += 1
+        if count >= n:
+            return
+
+
+RECIPES.update(
+    {
+        "adequacy_synth": adequacy_synth,
+        "rule_routing_synth": rule_routing_synth,
+        "base_rates_synth": base_rates_synth,
+        "helpsteer2_soft": helpsteer2_soft,
+    }
+)
+
 
 def write(rows: Iterable[dict], path: str) -> int:
     n = 0
@@ -339,40 +665,99 @@ def write(rows: Iterable[dict], path: str) -> int:
     return n
 
 
+def parse_counts(spec: str, default: int) -> dict[str, int]:
+    """'a,b,c=1200' -> {a: default, b: default, c: 1200}"""
+    out = {}
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, num = part.partition("=")
+        out[name.strip()] = int(num) if num else default
+    return out
+
+
+def ngrams(text: str, n: int = 8) -> set[str]:
+    words = text.lower().split()
+    return {" ".join(words[i : i + n]) for i in range(max(0, len(words) - n + 1))}
+
+
+def check_overlap(train_path: str, against: list[str], n: int = 8) -> int:
+    """Flag training rows that share an n-gram of `n` words with any benchmark item.
+    Run this before training on anything you intend to evaluate on."""
+    bench = set()
+    for path in against:
+        for row in read_jsonl_any(path):
+            bench |= ngrams(
+                json.dumps(row.get("state", "")) + " " + json.dumps(row.get("question", "")), n
+            )
+    hits = 0
+    for i, row in enumerate(read_jsonl_any(train_path)):
+        text = json.dumps(row.get("state", "")) + " " + json.dumps(row.get("questions", ""))
+        if ngrams(text, n) & bench:
+            hits += 1
+            if hits <= 10:
+                print(f"  overlap: row {i} source={row.get('source')}")
+    return hits
+
+
+def read_jsonl_any(path: str):
+    with open(path) as f:
+        for line in f:
+            if line.strip():
+                yield json.loads(line)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="build reflex training data from public datasets")
     sub = ap.add_subparsers(dest="cmd", required=True)
     m = sub.add_parser("mix", help="sample from several recipes into one JSONL")
-    m.add_argument("--sources", default=",".join(RECIPES), help="comma-separated recipe names")
+    m.add_argument(
+        "--sources",
+        default=",".join(RECIPES),
+        help="comma-separated recipe names, optionally name=count",
+    )
     m.add_argument("--per-source", type=int, default=800)
     m.add_argument("--eval-per-source", type=int, default=200)
     m.add_argument("--out", required=True)
     m.add_argument("--eval-out", default=None)
     m.add_argument("--seed", type=int, default=0)
+    c = sub.add_parser(
+        "check-overlap", help="flag training rows that share 8-grams with benchmark items"
+    )
+    c.add_argument("--train", required=True)
+    c.add_argument("--against", nargs="+", required=True)
+    c.add_argument("--n", type=int, default=8)
     args = ap.parse_args(argv)
 
-    sources = [s.strip() for s in args.sources.split(",") if s.strip()]
-    for s in sources:
+    if args.cmd == "check-overlap":
+        hits = check_overlap(args.train, args.against, args.n)
+        print(f"{hits} overlapping rows")
+        return 1 if hits else 0
+
+    counts = parse_counts(args.sources, args.per_source)
+    for s in counts:
         if s not in RECIPES:
             ap.error(f"unknown source {s!r}; choose from {', '.join(RECIPES)}")
 
-    def build(split: str, per: int):
+    def build(split: str, scale: float):
         rows = []
-        for s in sources:
-            got = list(RECIPES[s](per, args.seed, split))
-            print(f"  {s:<16} {split:<6} {len(got):>6} examples")
+        for s, per in counts.items():
+            got = list(RECIPES[s](max(1, int(per * scale)), args.seed, split))
+            print(f"  {s:<20} {split:<6} {len(got):>6} examples")
             rows.extend(got)
         random.Random(args.seed).shuffle(rows)
         return rows
 
-    print(f"train (up to {args.per_source} per source):")
-    n = write(build("train", args.per_source), args.out)
+    print("train:")
+    n = write(build("train", 1.0), args.out)
     print(f"wrote {n} rows to {args.out}")
     if args.eval_out:
-        print(f"eval (up to {args.eval_per_source} per source, held-out splits):")
-        n = write(build("test", args.eval_per_source), args.eval_out)
+        print(f"eval ({args.eval_per_source}/{args.per_source} of each source, held-out splits):")
+        n = write(build("test", args.eval_per_source / args.per_source), args.eval_out)
         print(f"wrote {n} rows to {args.eval_out}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
