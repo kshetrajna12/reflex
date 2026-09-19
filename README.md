@@ -149,16 +149,39 @@ What we measured (lower ECE = more honest; Jev reports 0.031):
 | Qwen3.5-4B | 72 % | 0.090 | **0.039** |
 | Qwen3-8B | 71 % | 0.264 | 0.061 |
 
-If you have your own labelled examples (say, 1,000 old tickets with the right queue),
-you can go further and fine-tune a small adapter so the model is calibrated *on your
-data*:
+## Fine-tune it to be honest (and better) on real tasks
 
-```bash
-uv run reflex-calibrate train --data my_tickets.jsonl --val my_tickets_val.jsonl --out runs/lora
-uv run reflex-serve --adapter runs/lora --calibration runs/lora/calibration.json
+Temperature fixes over-confidence but cannot make the model *better* at a task. For that
+you train it, and the recipe is simple: show it labelled examples and penalise it with a
+proper scoring rule (log loss or Brier), which is minimised only by the true
+probabilities. That is the supervised form of the "RLCD" training Jev uses.
+
+You need labelled data in the same shape as a request, one JSON object per line:
+
+```json
+{"state": {"comment": "..."}, "questions": {"toxic": {"type": "noul", "instructions": "..."}},
+ "labels": {"toxic": 0.67}, "source": "civil_comments"}
 ```
 
-The data format is one JSON object per line: `{"state": ..., "questions": {...}, "labels": {question_id: answer}}`.
+Labels can be hard (`"billing"`, `true`, `2`) or **soft** (`0.67`, `{"billing": 0.7, "sales": 0.3}`)
+when annotators disagreed; soft labels are what a proper scoring rule wants.
+
+`reflex-data` builds such files from eight public datasets, one recipe each, covering all
+three primitives (routing intents, exam questions, toxicity with soft labels,
+hallucination checks, passage relevance, response helpfulness, code-review chunks):
+
+```bash
+uv run reflex-data mix --out runs/mix_train.jsonl --eval-out runs/mix_eval.jsonl --per-source 800
+uv run reflex-calibrate train --data runs/mix_train.jsonl --val runs/mix_eval.jsonl --out runs/lora-mix
+uv run reflex-serve --adapter runs/lora-mix --calibration runs/lora-mix/calibration.json
+```
+
+Training is LoRA by default: minutes on one GPU, base model untouched. `--full` updates
+every weight instead, which fits a 4B model on a large GPU but rarely helps for a few
+thousand examples. The trainer prints accuracy and calibration per source before and
+after, so you can see exactly what the training bought. Your own data plugs in the same
+way; `src/reflex/train/recipes.py` shows how each public dataset was mapped onto a
+primitive, which is the part to copy.
 
 ## Example: triaging a pull request
 

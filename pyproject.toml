@@ -33,6 +33,7 @@ dev = ["pytest>=8", "ruff>=0.6"]
 reflex-serve = "reflex.server:main"
 reflex-eval-mmlu = "reflex.eval.mmlu:main"
 reflex-calibrate = "reflex.train.calibrate:main"
+reflex-data = "reflex.train.recipes:main"
 
 [tool.uv]
 index-strategy = "unsafe-best-match"

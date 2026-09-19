@@ -165,9 +165,14 @@ uv run reflex-calibrate train --model Qwen/Qwen3.5-4B --data runs/mmlu_val.jsonl
 uv run reflex-serve --model Qwen/Qwen3.5-4B --adapter runs/lora-mmlu \
     --calibration runs/lora-mmlu/calibration.json
 ```
-Training data is JSONL of `{state, questions, labels}` (see `reflex/train/data.py`), so any
-labelled routing / moderation / scoring dataset plugs in the same way. `--permutations N`
-shuffles option order as augmentation, which also attacks letter-position bias.
+Training data is JSONL of `{state, questions, labels, source}` (see `reflex/train/data.py`);
+labels may be hard or soft distributions, and the loss is the cross-entropy / Brier
+score against that distribution. `reflex/train/recipes.py` maps eight public datasets
+(banking77, clinc, MMLU-Pro, civil_comments with soft toxicity labels, HaluEval,
+MS MARCO, HelpSteer2, github-codereview) onto the three primitives; `reflex-data mix`
+samples them into train/eval files and the trainer reports per source. `--permutations N`
+shuffles option order as augmentation, which also attacks letter-position bias. `--full`
+trains all weights instead of LoRA adapters.
 
 ## Browser version (`docs/`)
 

@@ -1,30 +1,41 @@
-"""RLCD-lite: fine-tune the readout to be *calibrated*, with a proper scoring rule.
+"""Fine-tune the readout to be *calibrated*, with a proper scoring rule ("RLCD-lite").
 
 TypeSafe trains Jev with "Reinforcement Learning for Calibrated Decisions": the policy
 emits a probability distribution and is rewarded with a proper scoring rule. For a model
 whose output *is* the distribution (no sampling), the expected reward is differentiable
 in closed form, so the RL objective collapses to plain minimisation of the scoring rule:
 
-    log score   ->  NLL       -log p(y)
-    Brier score ->  ||p - onehot(y)||^2
+    log score   ->  NLL     -sum_k q_k log p_k          (cross-entropy against the target)
+    Brier score ->  ||p - q||^2
 
-Both are proper: the unique minimiser is the true conditional distribution, which is
-exactly what "epistemically honest probabilities" means. We train LoRA adapters on the
-label-restricted next-token logits through the very same packed forward the server uses.
+Both are proper: the unique minimiser is the true conditional distribution q, which is
+exactly what "epistemically honest probabilities" means. q may be a one-hot label or a
+soft label (e.g. the fraction of annotators who said "toxic"). We train on the
+label-restricted next-token logits through the same forward the server uses.
 
-    reflex-calibrate make-mmlu --out runs/mmlu_val.jsonl --split validation
-    reflex-calibrate train --data runs/mmlu_val.jsonl --val runs/mmlu_dev.jsonl \
-        --model Qwen/Qwen3-8B --out runs/lora-mmlu --epochs 1
-    reflex-serve --model Qwen/Qwen3-8B --adapter runs/lora-mmlu --calibration runs/lora-mmlu/calibration.json
+Two ways to update the weights:
+  * LoRA (default): small adapters on the attention/MLP projections. Minutes on one GPU,
+    keeps the base model intact, and is all a few thousand calibration examples need.
+  * --full: update every weight. Fits a 4B model on an 80-128 GB GPU. Rarely worth it
+    for calibration; try it when you have tens of thousands of in-domain labels and LoRA
+    has plateaued.
+
+    reflex-data mix --out runs/mix_train.jsonl --eval-out runs/mix_eval.jsonl
+    reflex-calibrate train --data runs/mix_train.jsonl --val runs/mix_eval.jsonl \
+        --model Qwen/Qwen3.5-4B --out runs/lora-mix
+    reflex-serve --model Qwen/Qwen3.5-4B --adapter runs/lora-mix \
+        --calibration runs/lora-mix/calibration.json
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import random
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -32,70 +43,101 @@ import torch
 import torch.nn.functional as F
 
 from reflex.eval.metrics import fit_temperature, report
-from reflex.readout import Calibration, softmax
-from reflex.train.data import examples, mmlu_to_jsonl
+from reflex.readout import softmax
+from reflex.train.data import Example, examples, mmlu_to_jsonl
 
 log = logging.getLogger("reflex.train")
 
 
-def scoring_loss(logits: torch.Tensor, target: int, kind: str) -> torch.Tensor:
+# ------------------------------------------------------------------------------- loss
+
+
+def scoring_loss(logits: torch.Tensor, target: torch.Tensor, kind: str) -> torch.Tensor:
+    """Proper scoring rule between the model's distribution and the target distribution."""
     if kind == "nll":
-        return -F.log_softmax(logits, -1)[target]
+        return -(target * F.log_softmax(logits, -1)).sum()
     if kind == "brier":
-        p = F.softmax(logits, -1)
-        onehot = torch.zeros_like(p)
-        onehot[target] = 1
-        return ((p - onehot) ** 2).sum()
+        return ((F.softmax(logits, -1) - target) ** 2).sum()
     raise ValueError(kind)
 
 
-def evaluate(engine, val, permutations=1):
-    rows = engine.label_logits_batch([(s, b) for s, b, _ in val])
-    labels = np.array([t for _, _, t in val])
-    # pad to common width for the report (questions may have different K)
+# ------------------------------------------------------------------------------- eval
+
+
+def evaluate(engine, exs: list[Example], temperature: float = 1.0) -> dict[str, str]:
+    """Calibration report overall and per source. Returns {name: report text}."""
+    rows = engine.label_logits_batch([(e.state, e.branch) for e in exs])
     K = max(len(r) for r in rows)
     logits = np.full((len(rows), K), -1e9)
     for i, r in enumerate(rows):
         logits[i, : len(r)] = r
-    return logits, labels
+    labels = np.array([e.hard_label for e in exs])
+    probs = np.stack([softmax(r, temperature) for r in logits])
+    out = {"all": str(report(probs, labels))}
+    by_src = defaultdict(list)
+    for i, e in enumerate(exs):
+        by_src[e.source or "?"].append(i)
+    for src, idx in sorted(by_src.items()):
+        idx = np.array(idx)
+        out[src] = str(report(probs[idx], labels[idx]))
+    return out, logits, labels
+
+
+def print_reports(title: str, reports: dict[str, str]) -> None:
+    print(f"\n== {title} ==")
+    for name, text in reports.items():
+        head = text.splitlines()[0]  # one summary line per source keeps the log readable
+        print(f"  {name:<16} {head}")
+
+
+# ------------------------------------------------------------------------------- train
 
 
 def train(args):
-    from peft import LoraConfig, get_peft_model
-
     from reflex.engine import Engine
 
     engine = Engine.load(args.model, max_pack_tokens=args.max_pack_tokens)
-    fmt = engine.fmt
-    train_ex = examples(args.data, fmt, permutations=args.permutations, seed=args.seed)
-    val_ex = examples(args.val, fmt) if args.val else []
+    train_ex = examples(args.data, engine.fmt, permutations=args.permutations, seed=args.seed)
+    val_ex = examples(args.val, engine.fmt) if args.val else []
     log.info("%d training examples, %d val examples", len(train_ex), len(val_ex))
 
     if val_ex:
-        logits, labels = evaluate(engine, val_ex)
-        print("== before ==\n" + str(report(np.stack([softmax(l) for l in logits]), labels)))
+        reports, _, _ = evaluate(engine, val_ex)
+        print_reports("before training", reports)
 
-    lcfg = LoraConfig(
-        r=args.lora_r,
-        lora_alpha=2 * args.lora_r,
-        lora_dropout=0.0,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"]
-        + (["gate_proj", "up_proj", "down_proj"] if args.lora_mlp else []),
-        task_type="CAUSAL_LM",
-    )
-    model = get_peft_model(engine.model, lcfg)
+    # ---- which weights to train
+    if args.full:
+        model = engine.model
+        for p in model.parameters():
+            p.requires_grad_(True)
+    else:
+        from peft import LoraConfig, get_peft_model
+
+        model = get_peft_model(
+            engine.model,
+            LoraConfig(
+                r=args.lora_r,
+                lora_alpha=2 * args.lora_r,
+                lora_dropout=0.0,
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj"]
+                + (["gate_proj", "up_proj", "down_proj"] if args.lora_mlp else []),
+                task_type="CAUSAL_LM",
+            ),
+        )
+        model.print_trainable_parameters()
+        engine.model = model
     if args.grad_checkpoint:
         model.gradient_checkpointing_enable()
-        model.enable_input_require_grads()
-    model.print_trainable_parameters()
-    engine.model = model
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
     params = [p for p in model.parameters() if p.requires_grad]
-    for p in params:
-        p.data = p.data.float()
+    if not args.full:  # LoRA weights in fp32 for a stable optimiser; the base stays bf16
+        for p in params:
+            p.data = p.data.float()
     opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=0.0)
 
-    n_packs = sum(1 for _ in engine.iter_batches([(s, b) for s, b, _ in train_ex]))
-    total_steps = math.ceil(n_packs * args.epochs / args.accum)
+    n_batches = sum(1 for _ in engine.iter_batches([(e.state, e.branch) for e in train_ex]))
+    total_steps = math.ceil(n_batches * args.epochs / args.accum)
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt,
         lambda s: min(1.0, (s + 1) / max(1, args.warmup)) * max(0.0, 1 - s / max(1, total_steps)),
@@ -105,17 +147,22 @@ def train(args):
     rng = random.Random(args.seed)
     for epoch in range(args.epochs):
         rng.shuffle(train_ex)
-        items = [(s, b) for s, b, _ in train_ex]
         model.train()
-        for micro, (idx, batch) in enumerate(engine.iter_batches(items)):
+        running = []
+        for micro, (idx, batch) in enumerate(
+            engine.iter_batches([(e.state, e.branch) for e in train_ex])
+        ):
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 logits = engine.forward_batch(batch)
             losses = []
             for i, row in zip(idx, logits):
-                z = engine.restrict(row.float(), train_ex[i][1])
-                losses.append(scoring_loss(z, train_ex[i][2], args.loss))
+                e = train_ex[i]
+                z = engine.restrict(row.float(), e.branch)
+                q = torch.tensor(e.target, dtype=torch.float32, device=z.device)
+                losses.append(scoring_loss(z, q, args.loss))
             loss = torch.stack(losses).mean() / args.accum
             loss.backward()
+            running.append(loss.item() * args.accum)
             if (micro + 1) % args.accum == 0:
                 torch.nn.utils.clip_grad_norm_(params, 1.0)
                 opt.step()
@@ -128,7 +175,7 @@ def train(args):
                         epoch,
                         step,
                         total_steps,
-                        loss.item() * args.accum,
+                        float(np.mean(running[-args.log_every * args.accum :])),
                         sched.get_last_lr()[0],
                         time.perf_counter() - t0,
                     )
@@ -137,17 +184,20 @@ def train(args):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(out)
-    log.info("saved adapter to %s", out)
+    if args.full:
+        engine.tok.save_pretrained(out)
+    log.info("saved %s to %s", "full model" if args.full else "adapter", out)
 
     if val_ex:
-        logits, labels = evaluate(engine, val_ex)
-        print("== after ==\n" + str(report(np.stack([softmax(l) for l in logits]), labels)))
+        reports, logits, labels = evaluate(engine, val_ex)
+        print_reports("after training", reports)
         T = fit_temperature(logits, labels)
-        print(
-            f"== after + temperature T={T:.3f} ==\n"
-            + str(report(np.stack([softmax(l, T) for l in logits]), labels))
-        )
-        Calibration(temperature={"noul": T, "choice": T, "score": T}).save(out / "calibration.json")
+        reports_t, _, _ = evaluate(engine, val_ex, temperature=T)
+        print_reports(f"after training + temperature T={T:.3f}", reports_t)
+        with open(out / "calibration.json", "w") as f:
+            json.dump({"temperature": {"noul": T, "choice": T, "score": T}}, f, indent=2)
+        with open(out / "eval_report.txt", "w") as f:
+            f.writelines(f"### {name}\n{text}\n\n" for name, text in reports.items())
 
 
 def main(argv=None):
@@ -170,6 +220,9 @@ def main(argv=None):
     t.add_argument("--lr", type=float, default=1e-4)
     t.add_argument("--warmup", type=int, default=10)
     t.add_argument("--accum", type=int, default=1)
+    t.add_argument(
+        "--full", action="store_true", help="update all weights instead of LoRA adapters"
+    )
     t.add_argument("--lora-r", type=int, default=16)
     t.add_argument("--lora-mlp", action="store_true")
     t.add_argument("--grad-checkpoint", action="store_true")
@@ -184,6 +237,8 @@ def main(argv=None):
         n = mmlu_to_jsonl(args.out, args.split, args.n, args.seed)
         print(f"wrote {n} items to {args.out}")
     else:
+        if args.full and args.lr >= 1e-4:
+            log.warning("--full with lr %.0e is aggressive; 1e-5 is a safer start", args.lr)
         train(args)
 
 
