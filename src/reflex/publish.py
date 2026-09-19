@@ -14,11 +14,10 @@ from pathlib import Path
 
 
 def model_card(base: str, src: Path) -> str:
-    cal = (
-        json.load(open(src / "calibration.json"))["temperature"]
-        if (src / "calibration.json").exists()
-        else None
-    )
+    cal = None
+    if (src / "calibration.json").exists():
+        with open(src / "calibration.json") as f:
+            cal = json.load(f)["temperature"]
     report = (src / "eval_report.txt").read_text() if (src / "eval_report.txt").exists() else ""
     return f"""---
 base_model: {base}
