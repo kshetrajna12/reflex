@@ -10,7 +10,7 @@ configuration on a rented GPU.
 |---|---|
 | base model | `Qwen/Qwen3.5-4B` (bf16) |
 | adapter | `kshetrajna12/reflex-qwen3.5-4b-lora` (LoRA from `reflex-calibrate`; `calibration.json` inside it is applied automatically) |
-| reflex commit | `<sha>` |
+| reflex commit | `1add693` |
 | endpoint | `POST /v1/systemone`, TypeSafe-compatible; `model` may be omitted |
 | GPU | any CUDA GPU with ≥ 16 GB (RTX PRO 4500 32 GB, A40, L4 all fine); ~9 GB weights |
 
