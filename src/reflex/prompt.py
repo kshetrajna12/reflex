@@ -200,7 +200,9 @@ def build_branches(
         prefix = fmt.t("score_level_prefix")
 
         def desc_of(k):
-            return f"{prefix.format(i=k, n=len(keys) - 1)} {render_text(q.criteria[k])}"
+            # plain token replacement: the prefix may be optimiser-generated and contain braces
+            head = prefix.replace("{i}", str(k)).replace("{n}", str(len(keys) - 1))
+            return f"{head} {render_text(q.criteria[k])}"
 
     out: list[Branch] = []
     for p in range(permutations):
