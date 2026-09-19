@@ -139,7 +139,10 @@ def train(args):
     log.info("args: %s", vars(args))
 
     engine = Engine.load(
-        args.model, max_pack_tokens=args.max_pack_tokens, prompt_style=args.prompt_style
+        args.model,
+        max_pack_tokens=args.max_pack_tokens,
+        prompt_style=args.prompt_style,
+        prompt_texts=args.prompt_texts,
     )
     train_ex = examples(args.data, engine.fmt, permutations=args.permutations, seed=args.seed)
     val_ex = examples(args.val, engine.fmt) if args.val else []
@@ -318,6 +321,7 @@ def evaluate_adapter(args):
         calibration_path=args.calibration,
         max_pack_tokens=args.max_pack_tokens,
         prompt_style=args.prompt_style,
+        prompt_texts=args.prompt_texts,
     )
     exs = examples(args.val, engine.fmt)
     reports, logits, labels = evaluate(engine, exs)
@@ -347,6 +351,7 @@ def refit(args):
         adapter_path=args.adapter,
         max_pack_tokens=args.max_pack_tokens,
         prompt_style=args.prompt_style,
+        prompt_texts=args.prompt_texts,
     )
     val_ex = examples(args.val, engine.fmt)
     reports, logits, labels = evaluate(engine, val_ex)
@@ -375,6 +380,7 @@ def main(argv=None):
         "refit",
         help="re-fit the calibration (temperatures + head) for an adapter on a labelled set",
     )
+    ev.add_argument("--prompt-texts", default=None, help="prompt.json from reflex-optimize")
     r.add_argument("--model", default="Qwen/Qwen3.5-4B")
     r.add_argument("--adapter", required=True)
     r.add_argument("--val", required=True)
@@ -403,12 +409,14 @@ def main(argv=None):
     t.add_argument(
         "--full", action="store_true", help="update all weights instead of LoRA adapters"
     )
+    r.add_argument("--prompt-texts", default=None, help="prompt.json from reflex-optimize")
     t.add_argument("--lora-r", type=int, default=16)
     t.add_argument("--lora-mlp", action="store_true")
     t.add_argument("--grad-checkpoint", action="store_true")
     t.add_argument("--permutations", type=int, default=1, help="option-order augmentation")
     t.add_argument("--max-pack-tokens", type=int, default=4096)
     t.add_argument("--prompt-style", default="markdown", choices=["markdown", "compact"])
+    t.add_argument("--prompt-texts", default=None, help="prompt.json from reflex-optimize")
     t.add_argument("--seed", type=int, default=0)
     t.add_argument("--log-every", type=int, default=10)
 
