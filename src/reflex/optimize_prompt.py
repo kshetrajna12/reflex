@@ -41,6 +41,8 @@ def score_example(probs: np.ndarray, target: np.ndarray) -> float:
 class ReflexAdapter:
     """GEPAAdapter for reflex: a candidate is a dict of prompt components."""
 
+    propose_new_texts = None  # None = use gepa's built-in reflective proposer
+
     def __init__(self, engine, components: list[str]):
         self.engine = engine
         self.base_fmt = engine.fmt
