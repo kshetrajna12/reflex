@@ -9,7 +9,7 @@ configuration on a rented GPU.
 | | |
 |---|---|
 | base model | `Qwen/Qwen3.5-4B` (bf16) |
-| adapter | `<hub repo>` (LoRA from `reflex-calibrate`; `calibration.json` inside it is applied automatically) |
+| adapter | `kshetrajna12/reflex-qwen3.5-4b-lora` (LoRA from `reflex-calibrate`; `calibration.json` inside it is applied automatically) |
 | reflex commit | `<sha>` |
 | endpoint | `POST /v1/systemone`, TypeSafe-compatible; `model` may be omitted |
 | GPU | any CUDA GPU with ≥ 16 GB (RTX PRO 4500 32 GB, A40, L4 all fine); ~9 GB weights |
@@ -21,12 +21,12 @@ With uv (Python 3.12):
     git clone https://github.com/kshetrajna12/reflex && cd reflex && git checkout <sha>
     uv sync
     REFLEX_API_KEY=<secret> uv run reflex-serve --model Qwen/Qwen3.5-4B \
-        --adapter <hub repo> --served-name reflex --host 0.0.0.0 --port 8000
+        --adapter kshetrajna12/reflex-qwen3.5-4b-lora --served-name reflex --host 0.0.0.0 --port 8000
 
 With Docker:
 
     docker build -t reflex-server -f docker/Dockerfile .
-    docker run --gpus all -p 8000:8000 -e REFLEX_ADAPTER=<hub repo> -e REFLEX_API_KEY=<secret> \
+    docker run --gpus all -p 8000:8000 -e REFLEX_ADAPTER=kshetrajna12/reflex-qwen3.5-4b-lora -e REFLEX_API_KEY=<secret> \
         -v ~/.cache/huggingface:/root/.cache/huggingface reflex-server
 
 The first request after start compiles Triton kernels (~20 s). Send one warm-up request
