@@ -10,7 +10,7 @@ trained with a proper scoring rule ("RLCD-lite"). It serves TypeSafe's `/v1/syst
 wire format, so your `typesafe` adapter runs it unchanged.
 
 Configuration to evaluate:
-- base Qwen/Qwen3.5-4B, LoRA adapter `<hub repo>` (calibration.json inside), reflex commit `<sha>`
+- base Qwen/Qwen3.5-4B, LoRA adapter `kshetrajna12/reflex-qwen3.5-4b-lora` (calibration.json inside), reflex commit `<sha>`
 - serving recipe (uv or Docker, one command): docs/SERVING.md
 - any 16 GB+ CUDA GPU; ~9 GB weights; first request compiles Triton kernels (~20 s)
 
