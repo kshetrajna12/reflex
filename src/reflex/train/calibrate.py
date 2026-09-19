@@ -66,6 +66,7 @@ def scoring_loss(logits: torch.Tensor, target: torch.Tensor, kind: str) -> torch
 
 def evaluate(engine, exs: list[Example], temperature: float = 1.0) -> dict[str, str]:
     """Calibration report overall and per source. Returns {name: report text}."""
+    log.info("evaluating %d examples", len(exs))
     rows = engine.label_logits_batch([(e.state, e.branch) for e in exs])
     K = max(len(r) for r in rows)
     logits = np.full((len(rows), K), -1e9)
@@ -84,10 +85,12 @@ def evaluate(engine, exs: list[Example], temperature: float = 1.0) -> dict[str, 
 
 
 def print_reports(title: str, reports: dict[str, str]) -> None:
-    print(f"\n== {title} ==")
+    lines = [f"== {title} =="]
     for name, text in reports.items():
         head = text.splitlines()[0]  # one summary line per source keeps the log readable
-        print(f"  {name:<16} {head}")
+        lines.append(f"  {name:<16} {head}")
+    print("\n" + "\n".join(lines))
+    log.info("\n".join(lines))
 
 
 # ------------------------------------------------------------------------------- train
@@ -95,6 +98,15 @@ def print_reports(title: str, reports: dict[str, str]) -> None:
 
 def train(args):
     from reflex.engine import Engine
+
+    # Always keep a plain log file next to the output: `tail -f runs/<out>/train.log`
+    # shows progress regardless of how stdout is piped.
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fh = logging.FileHandler(out_dir / "train.log")
+    fh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    logging.getLogger().addHandler(fh)
+    log.info("args: %s", vars(args))
 
     engine = Engine.load(args.model, max_pack_tokens=args.max_pack_tokens)
     train_ex = examples(args.data, engine.fmt, permutations=args.permutations, seed=args.seed)
