@@ -356,6 +356,8 @@ def refit(args):
     val_ex = examples(args.val, engine.fmt)
     reports, logits, labels = evaluate(engine, val_ex)
     print_reports("uncalibrated", reports)
+    if not (args.out or args.adapter):
+        raise SystemExit("--out is required when calibrating the base model")
     out = Path(args.out or args.adapter)
     out.mkdir(parents=True, exist_ok=True)
     fit_calibration(engine, val_ex, logits, labels, out)
@@ -382,7 +384,9 @@ def main(argv=None):
     )
     ev.add_argument("--prompt-texts", default=None, help="prompt.json from reflex-optimize")
     r.add_argument("--model", default="Qwen/Qwen3.5-4B")
-    r.add_argument("--adapter", required=True)
+    r.add_argument(
+        "--adapter", default=None, help="adapter dir or hub id; omit to calibrate the base model"
+    )
     r.add_argument("--val", required=True)
     r.add_argument(
         "--out", default=None, help="where to write calibration.json (default: the adapter dir)"
