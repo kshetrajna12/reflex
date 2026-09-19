@@ -1082,7 +1082,7 @@ def quality(n: int, seed: int, split: str) -> Iterator[dict]:
             "labels": {"answer": keys[ans - 1 if 1 <= ans <= len(keys) else 0]},
             "source": "quality",
         }
-        count += 1
+        count += 1  # noqa: SIM113
         if count >= n:
             return
 
