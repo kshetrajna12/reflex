@@ -108,6 +108,11 @@ def main(argv=None):
     )
     ap.add_argument("--prompt-style", default="markdown", choices=["markdown", "compact"])
     ap.add_argument(
+        "--prompt-texts",
+        default=None,
+        help="prompt.json from reflex-optimize (instruction wording)",
+    )
+    ap.add_argument(
         "--permutations",
         type=int,
         default=1,
@@ -133,6 +138,7 @@ def main(argv=None):
         max_pack_tokens=args.max_pack_tokens,
         default_permutations=args.permutations,
         prompt_style=args.prompt_style,
+        prompt_texts=args.prompt_texts,
     )
     if args.served_name:
         engine.model_name = args.served_name

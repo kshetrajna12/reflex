@@ -69,6 +69,21 @@ class Branch:
     keys: list[Any] = field(default_factory=list)
 
 
+# Every piece of instruction wording the model sees, as named components. A prompt
+# optimiser (reflex-optimize, GEPA) edits these; nothing else about the layout changes.
+DEFAULT_TEXTS = {
+    "system_prompt": SYSTEM_PROMPT,
+    "state_heading": "# State",
+    "question_heading": "# Question",
+    "options_heading": "# Options",
+    "noul_ask": "Respond with only Yes or No.",
+    "choice_ask": "Respond with only the letter of the best option.",
+    "score_ask": "Respond with only the letter of the level that best matches.",
+    "noul_true_default": "The statement is true.",
+    "noul_false_default": "The statement is false.",
+    "score_level_prefix": "(level {i} of {n})",
+}
+
 COMPACT_SYSTEM_PROMPT = (
     "You are given a JSON object with the state, a question about it, and lettered options. "
     "Judge the question against the state and pick the single best option. "
@@ -92,19 +107,29 @@ class PromptFormat:
     no_think: bool = True  # Qwen3 hybrid models: emit empty <think> block to skip reasoning
     system_prompt: str = SYSTEM_PROMPT
     style: str = "markdown"
+    texts: dict[str, str] = field(default_factory=dict)  # overrides for DEFAULT_TEXTS
 
     def __post_init__(self):
         if self.style not in ("markdown", "compact"):
             raise ValueError(f"unknown prompt style {self.style!r}")
         if self.style == "compact" and self.system_prompt == SYSTEM_PROMPT:
             self.system_prompt = COMPACT_SYSTEM_PROMPT
+        if "system_prompt" in self.texts:
+            self.system_prompt = self.texts["system_prompt"]
+
+    def t(self, key: str) -> str:
+        return self.texts.get(key, DEFAULT_TEXTS[key])
+
+    @classmethod
+    def with_texts(cls, base: PromptFormat, texts: dict[str, str]) -> PromptFormat:
+        return cls(chat=base.chat, no_think=base.no_think, style=base.style, texts=dict(texts))
 
     def prefix(self, state: Text) -> str:
         if self.style == "compact":
             # the state is the first member of the JSON payload; branches close the object
             body = '{"state": ' + json.dumps(state, ensure_ascii=False) + ", "
         else:
-            body = f"# State\n{render_text(state)}\n\n"
+            body = f"{self.t('state_heading')}\n{render_text(state)}\n\n"
         if not self.chat:
             return f"{self.system_prompt}\n\n{body}"
         return f"<|im_start|>system\n{self.system_prompt}<|im_end|>\n<|im_start|>user\n{body}"
@@ -118,8 +143,12 @@ class PromptFormat:
         return f"{body}{tail}"
 
 
-def _options_block(instructions: Text, labelled: list[tuple[str, str]], ask: str) -> str:
-    lines = [f"# Question\n{render_text(instructions)}\n", "# Options"]
+def _options_block(
+    instructions: Text, labelled: list[tuple[str, str]], ask: str, fmt: PromptFormat | None = None
+) -> str:
+    qh = fmt.t("question_heading") if fmt else DEFAULT_TEXTS["question_heading"]
+    oh = fmt.t("options_heading") if fmt else DEFAULT_TEXTS["options_heading"]
+    lines = [f"{qh}\n{render_text(instructions)}\n", oh]
     for label, desc in labelled:
         lines.append(f"{label}. {desc}" if desc else f"{label}.")
     lines.append(f"\n{ask}\n")
@@ -150,15 +179,15 @@ def build_branches(
     if isinstance(q, NoulQuestion):
         t = render_text(q.criteria.true) if q.criteria else ""
         f = render_text(q.criteria.false) if q.criteria else ""
-        labelled = [(YES, t or "The statement is true."), (NO, f or "The statement is false.")]
-        body = _options_block(q.instructions, labelled, "Respond with only Yes or No.")
+        labelled = [(YES, t or fmt.t("noul_true_default")), (NO, f or fmt.t("noul_false_default"))]
+        body = _options_block(q.instructions, labelled, fmt.t("noul_ask"), fmt)
         return [Branch(qid, "noul", fmt.branch(body), [YES, NO], [True, False])]
 
     if isinstance(q, ChoiceQuestion):
         keys = list(q.criteria.keys())
         descs = {k: (render_text(v) if v is not None else "") for k, v in q.criteria.items()}
         kind = "choice"
-        ask = "Respond with only the letter of the best option."
+        ask = fmt.t("choice_ask")
 
         def desc_of(k):
             d = descs[k]
@@ -167,10 +196,11 @@ def build_branches(
     else:  # ScoreQuestion – ordered levels, never reordered semantically but may be permuted
         keys = list(range(len(q.criteria)))
         kind = "score"
-        ask = "Respond with only the letter of the level that best matches."
+        ask = fmt.t("score_ask")
+        prefix = fmt.t("score_level_prefix")
 
         def desc_of(k):
-            return f"(level {k} of {len(keys) - 1}) {render_text(q.criteria[k])}"
+            return f"{prefix.format(i=k, n=len(keys) - 1)} {render_text(q.criteria[k])}"
 
     out: list[Branch] = []
     for p in range(permutations):
@@ -179,7 +209,7 @@ def build_branches(
             rng.shuffle(order)
         labels = [LETTERS[i] for i in range(len(order))]
         labelled = [(lab, desc_of(k)) for lab, k in zip(labels, order)]
-        body = _options_block(q.instructions, labelled, ask)
+        body = _options_block(q.instructions, labelled, ask, fmt)
         out.append(Branch(qid, kind, fmt.branch(body), labels, order))
     return out
 

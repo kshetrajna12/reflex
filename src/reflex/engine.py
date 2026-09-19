@@ -168,6 +168,19 @@ class StateEntry:
     n_images: int = 0
 
 
+def _load_texts(src) -> dict[str, str]:
+    """Prompt text overrides: a dict, or a JSON file written by reflex-optimize."""
+    if not src:
+        return {}
+    if isinstance(src, dict):
+        return dict(src)
+    import json
+
+    with open(src) as f:
+        d = json.load(f)
+    return dict(d.get("texts", d))
+
+
 def _sibling_calibration(adapter: str) -> str | None:
     """calibration.json saved next to the adapter (locally or in its hub repo), if any."""
     import os
@@ -240,6 +253,7 @@ class Engine:
         chat: bool | None = None,
         adapter_path: str | None = None,
         prompt_style: str = "markdown",
+        prompt_texts: str | dict | None = None,
         **engine_kwargs,
     ) -> Engine:
         from transformers import (
@@ -273,6 +287,7 @@ class Engine:
             chat=bool(template) if chat is None else chat,
             no_think="enable_thinking" in template,
             style=prompt_style,
+            texts=_load_texts(prompt_texts),
         )
         cal = Calibration.load(calibration_path)
         eng = cls(model, tok, fmt, cal, model_name=model_id, processor=processor, **engine_kwargs)

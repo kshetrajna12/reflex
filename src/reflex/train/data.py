@@ -82,9 +82,15 @@ def target_vector(kind: str, label: Any, keys: list[Any]) -> np.ndarray:
 
 def examples(path: str, fmt: PromptFormat, permutations: int = 1, seed: int = 0) -> list[Example]:
     """Flatten a JSONL file into training examples (one per labelled question, per permutation)."""
+    return examples_from_rows(list(read_jsonl(path)), fmt, permutations, seed)
+
+
+def examples_from_rows(
+    rows: list[dict], fmt: PromptFormat, permutations: int = 1, seed: int = 0
+) -> list[Example]:
     rng = random.Random(seed)
     out: list[Example] = []
-    for row in read_jsonl(path):
+    for row in rows:
         req = SystemOneRequest(state=row["state"], questions=row["questions"])
         for qid, q in req.questions.items():
             if qid not in row.get("labels", {}):
