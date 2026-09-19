@@ -168,6 +168,23 @@ class StateEntry:
     n_images: int = 0
 
 
+def _sibling_calibration(adapter: str) -> str | None:
+    """calibration.json saved next to the adapter (locally or in its hub repo), if any."""
+    import os
+
+    local = os.path.join(adapter, "calibration.json")
+    if os.path.isfile(local):
+        return local
+    if os.path.isdir(adapter):
+        return None
+    try:
+        from huggingface_hub import hf_hub_download
+
+        return hf_hub_download(adapter, "calibration.json")
+    except (OSError, ValueError):  # no calibration in the repo: serve uncalibrated
+        return None
+
+
 class Engine:
     def __init__(
         self,
@@ -244,7 +261,10 @@ class Engine:
         if adapter_path:
             from peft import PeftModel
 
+            # a local dir from reflex-calibrate, or a hub id from reflex-publish-adapter
             model = PeftModel.from_pretrained(model, adapter_path).merge_and_unload()
+            if calibration_path is None:
+                calibration_path = _sibling_calibration(adapter_path)
         template = tok.chat_template or ""
         fmt = PromptFormat(
             chat=bool(template) if chat is None else chat,

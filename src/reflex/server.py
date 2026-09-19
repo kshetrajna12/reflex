@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import time
 
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from reflex.schema import SystemOneRequest, SystemOneResponse
@@ -20,12 +21,49 @@ from reflex.schema import SystemOneRequest, SystemOneResponse
 log = logging.getLogger("reflex.server")
 
 
-def create_app(engine) -> FastAPI:
+def create_app(engine, api_key: str | None = None) -> FastAPI:
+    """The HTTP surface. `api_key` (or env REFLEX_API_KEY) makes /v1/systemone require
+    `Authorization: Bearer <key>`, which you want on any endpoint reachable from the
+    internet, e.g. a rented GPU an evaluator calls."""
     app = FastAPI(title="reflex", version="0.1.0")
+    api_key = api_key or os.environ.get("REFLEX_API_KEY") or None
+
+    @app.middleware("http")
+    async def _auth(request: Request, call_next):
+        if (
+            api_key
+            and request.url.path.startswith("/v1/")
+            and request.headers.get("authorization", "") != f"Bearer {api_key}"
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": {
+                        "message": "Invalid or missing API key",
+                        "type": "invalid_api_key",
+                    }
+                },
+            )
+        return await call_next(request)
 
     @app.get("/healthz")
+    @app.get("/health")
     def healthz():
-        return {"ok": True, "model": engine.model_name, "device": str(engine.device)}
+        return {
+            "ok": True,
+            "status": "healthy",
+            "model": engine.model_name,
+            "calibration": engine.cal.temperature,
+            "strategy": engine.strategy,
+            "device": str(engine.device),
+        }
+
+    @app.get("/v1/models")
+    def models():
+        return {
+            "object": "list",
+            "data": [{"id": engine.model_name, "object": "model", "owned_by": "reflex"}],
+        }
 
     @app.post("/v1/systemone", response_model=SystemOneResponse)
     def systemone(req: SystemOneRequest):
@@ -54,8 +92,20 @@ def create_app(engine) -> FastAPI:
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3.5-4B")
-    ap.add_argument("--adapter", default=None, help="LoRA adapter dir from reflex-calibrate")
-    ap.add_argument("--calibration", default=None, help="calibration.json (temperatures)")
+    ap.add_argument(
+        "--adapter", default=None, help="LoRA adapter: a reflex-calibrate output dir or a hub id"
+    )
+    ap.add_argument(
+        "--calibration",
+        default=None,
+        help="calibration.json (default: the one next to the adapter)",
+    )
+    ap.add_argument(
+        "--api-key", default=None, help="require this bearer key on /v1/* (or env REFLEX_API_KEY)"
+    )
+    ap.add_argument(
+        "--served-name", default=None, help="name reported in responses (default: the model id)"
+    )
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8008)
     ap.add_argument("--max-pack-tokens", type=int, default=8192)
@@ -74,7 +124,14 @@ def main(argv=None):
         adapter_path=args.adapter,
         max_pack_tokens=args.max_pack_tokens,
     )
-    uvicorn.run(create_app(engine), host=args.host, port=args.port, log_level="warning")
+    if args.served_name:
+        engine.model_name = args.served_name
+    uvicorn.run(
+        create_app(engine, api_key=args.api_key),
+        host=args.host,
+        port=args.port,
+        log_level="warning",
+    )
 
 
 if __name__ == "__main__":

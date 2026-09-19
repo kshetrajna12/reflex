@@ -609,7 +609,8 @@ def helpsteer2_soft(n: int, seed: int, split: str) -> Iterator[dict]:
     path = hf_hub_download(
         "nvidia/HelpSteer2", "disagreements/disagreements.jsonl.gz", repo_type="dataset"
     )
-    rows = [json.loads(l) for l in gzip.open(path, "rt")]
+    with gzip.open(path, "rt") as f:
+        rows = [json.loads(line) for line in f]
     rng = random.Random(seed)
     rng.shuffle(rows)
     cut = len(rows) * 9 // 10
