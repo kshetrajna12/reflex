@@ -23,6 +23,12 @@ Sources (all on the Hugging Face hub):
     rule_routing_synth  request + stated policy -> specialist       choice
     base_rates_synth  stated outcome counts -> outcome              choice*
     policy_synth      long policy document + case -> outcome        choice
+    quality           3-6k-token passage + question -> option       choice   (QuALITY)
+    civil_soft        comment -> 5 toxicity dimensions              noul*    CC0
+    helpsteer2_multi  response -> 4 rated dimensions                score*   CC-BY-4.0
+    go_emotions_soft  comment -> 6 emotions, rater fractions        noul*    Apache-2.0
+  external test sets (`reflex-data external`, never in `mix`): bitext_support, toxic_chat,
+  mnli_mismatched, yelp_stars
   * soft label
 """
 
@@ -881,6 +887,317 @@ def policy_synth(n: int, seed: int, split: str) -> Iterator[dict]:
 
 RECIPES["policy_synth"] = policy_synth
 
+# ------------------------------------------------------------- more soft labels
+# Half of a good calibration mix should be *distributions*, not answers. These three
+# recipes turn real annotator disagreement into soft targets, several questions per state.
+
+
+def civil_soft(n: int, seed: int, split: str) -> Iterator[dict]:
+    """civil_comments carries annotator fractions per comment for several dimensions:
+    five soft nouls per state (toxicity, insult, threat, obscene, identity attack)."""
+    from datasets import load_dataset
+
+    dims = {
+        "toxic": (
+            "toxicity",
+            "Would a reasonable moderator consider this comment toxic (rude, disrespectful, or likely to make someone leave the discussion)?",
+        ),
+        "insult": ("insult", "Does the comment insult a person or group?"),
+        "threat": ("threat", "Does the comment contain a threat of harm?"),
+        "obscene": ("obscene", "Is the comment obscene or sexually explicit?"),
+        "identity_attack": (
+            "identity_attack",
+            "Does the comment attack someone for their identity (race, religion, gender, orientation, disability)?",
+        ),
+    }
+    ds = load_dataset("google/civil_comments", split=split)
+    ds = (
+        _shuffled(ds, seed + 1)
+        .select(range(min(20 * n, len(ds))))
+        .filter(lambda r: len(r["text"]) > 20 and r["toxicity"] > 0.05)
+    )
+    for row in ds.select(range(min(n, len(ds)))):
+        yield {
+            "state": {"comment": row["text"]},
+            "questions": {k: _noul(q) for k, (_, q) in dims.items()},
+            "labels": {k: round(float(row[col]), 4) for k, (col, _) in dims.items()},
+            "source": "civil_soft",
+        }
+
+
+_HS_DIMS = {
+    "helpfulness": (
+        "How helpful is the `response` to the `prompt`?",
+        [
+            "not helpful at all: ignores or misunderstands the request",
+            "slightly helpful: touches the request but mostly misses",
+            "partially helpful: addresses the request with notable gaps",
+            "mostly helpful: addresses the request well with minor gaps",
+            "extremely helpful: complete, correct and well presented",
+        ],
+    ),
+    "correctness": (
+        "How factually correct is the `response`?",
+        [
+            "mostly wrong or fabricated",
+            "several errors",
+            "some errors or omissions",
+            "minor inaccuracies only",
+            "fully correct",
+        ],
+    ),
+    "coherence": (
+        "How coherent and well organised is the `response`?",
+        [
+            "incoherent",
+            "hard to follow",
+            "mostly clear with rough spots",
+            "clear",
+            "very clear and well structured",
+        ],
+    ),
+    "verbosity": (
+        "How verbose is the `response` relative to what the `prompt` needs?",
+        ["far too short", "somewhat short", "about right", "somewhat long", "far too long"],
+    ),
+}
+
+
+def helpsteer2_multi(n: int, seed: int, split: str) -> Iterator[dict]:
+    """HelpSteer2 per-rater scores on four dimensions -> up to four soft Score questions
+    per response. Only rows where raters disagreed somewhere are kept."""
+    import gzip
+
+    from huggingface_hub import hf_hub_download
+
+    path = hf_hub_download(
+        "nvidia/HelpSteer2", "disagreements/disagreements.jsonl.gz", repo_type="dataset"
+    )
+    with gzip.open(path, "rt") as f:
+        rows = [json.loads(line) for line in f]
+    rng = random.Random(seed + 2)
+    rng.shuffle(rows)
+    cut = len(rows) * 9 // 10
+    rows = rows[:cut] if split == "train" else rows[cut:]
+    count = 0
+    for row in rows:
+        labels = {}
+        for dim in _HS_DIMS:
+            votes = [int(v) for v in (row.get(dim) or []) if v is not None]
+            if len(votes) >= 2:
+                labels[dim] = [votes.count(i) / len(votes) for i in range(5)]
+        if len(labels) < 2 or all(max(v) == 1.0 for v in labels.values()):
+            continue
+        yield {
+            "state": {"prompt": row["prompt"][-4000:], "response": row["response"][-4000:]},
+            "questions": {
+                dim: _score(q, levels) for dim, (q, levels) in _HS_DIMS.items() if dim in labels
+            },
+            "labels": labels,
+            "source": "helpsteer2_multi",
+        }
+        count += 1
+        if count >= n:
+            return
+
+
+_GO_EMOTIONS = {
+    "anger": "Does the writer express anger?",
+    "joy": "Does the writer express joy or happiness?",
+    "sadness": "Does the writer express sadness?",
+    "gratitude": "Does the writer express gratitude?",
+    "disappointment": "Does the writer express disappointment?",
+    "approval": "Does the writer express approval or agreement?",
+}
+
+
+def go_emotions_soft(n: int, seed: int, split: str) -> Iterator[dict]:
+    """GoEmotions raw ratings: every Reddit comment was labelled by 3-5 raters. The
+    fraction of raters who picked an emotion is the soft target for that emotion."""
+    from collections import defaultdict
+
+    from datasets import load_dataset
+
+    ds = load_dataset("google-research-datasets/go_emotions", "raw", split="train")
+    by_id: dict[str, list] = defaultdict(list)
+    for row in ds.select(range(min(len(ds), 60000))):
+        by_id[row["id"]].append(row)
+    ids = sorted(
+        i
+        for i, rs in by_id.items()
+        if len(rs) >= 3 and not any(r["example_very_unclear"] for r in rs)
+    )
+    rng = random.Random(seed + 3)
+    rng.shuffle(ids)
+    cut = len(ids) * 9 // 10
+    ids = ids[:cut] if split == "train" else ids[cut:]
+    count = 0
+    for i in ids:
+        rs = by_id[i]
+        labels = {e: round(sum(r[e] for r in rs) / len(rs), 4) for e in _GO_EMOTIONS}
+        if sum(labels.values()) == 0 and rng.random() < 0.6:
+            continue  # keep some all-zero rows, not most
+        yield {
+            "state": {"comment": rs[0]["text"], "raters": len(rs)},
+            "questions": {e: _noul(q) for e, q in _GO_EMOTIONS.items()},
+            "labels": labels,
+            "source": "go_emotions_soft",
+        }
+        count += 1
+        if count >= n:
+            return
+
+
+# ------------------------------------------------------------- long documents (real)
+
+
+def quality(n: int, seed: int, split: str) -> Iterator[dict]:
+    """QuALITY: multiple-choice questions over 3-6k-token stories and articles, written so
+    the answer needs the whole passage. The real long-context skill, hard labels."""
+    from datasets import load_dataset
+
+    ds = load_dataset("emozilla/quality", split="train" if split == "train" else "validation")
+    count = 0
+    for row in _shuffled(ds, seed):
+        article = row["article"]
+        if len(article) > 22000:  # ~5.5k tokens
+            article = article[:22000] + "\n[... truncated ...]"
+        opts = [str(o).strip() for o in row["options"]]
+        seen: dict[str, int] = {}
+        keys = []
+        for o in opts:
+            seen[o] = seen.get(o, 0) + 1
+            keys.append(o if seen[o] == 1 else f"{o} ({seen[o]})")
+        ans = int(row["answer"])
+        yield {
+            "state": {"passage": article, "question": row["question"].strip()},
+            "questions": {
+                "answer": _choice(
+                    "Based only on the `passage`, which option answers the `question`?",
+                    {k: None for k in keys},
+                )
+            },
+            "labels": {"answer": keys[ans - 1 if 1 <= ans <= len(keys) else 0]},
+            "source": "quality",
+        }
+        count += 1
+        if count >= n:
+            return
+
+
+# ------------------------------------------------------------- external test sets
+# Never mixed into training by default. Different domains from the training sources, so
+# they measure transfer rather than fit. `reflex-data external` builds them.
+
+
+def bitext_support(n: int, seed: int, split: str) -> Iterator[dict]:
+    """Customer-support intents from a different vendor than banking77/CLINC (27 intents,
+    12-way choice with distractors)."""
+    from datasets import load_dataset
+
+    ds = load_dataset("bitext/Bitext-customer-support-llm-chatbot-training-dataset", split="train")
+    names = sorted(set(ds.unique("intent")))
+    rng = random.Random(seed + 11)
+    for row in _shuffled(ds, seed + 11).select(range(min(n, len(ds)))):
+        gold = row["intent"]
+        opts = rng.sample([x for x in names if x != gold], 11) + [gold]
+        rng.shuffle(opts)
+        yield {
+            "state": {"customer_message": row["instruction"]},
+            "questions": {
+                "intent": _choice(
+                    "Which support intent best matches the customer's message?",
+                    {o.replace("_", " "): None for o in opts},
+                )
+            },
+            "labels": {"intent": gold.replace("_", " ")},
+            "source": "ext_bitext_support",
+        }
+
+
+def toxic_chat(n: int, seed: int, split: str) -> Iterator[dict]:
+    """Toxicity of real chatbot prompts (a different platform and style from civil_comments)."""
+    from datasets import load_dataset
+
+    ds = load_dataset("lmsys/toxic-chat", "toxicchat0124", split="test")
+    pos = [r for r in ds if int(r["toxicity"]) == 1]
+    neg = [r for r in ds if int(r["toxicity"]) == 0]
+    rng = random.Random(seed + 12)
+    rows = rng.sample(pos, min(n // 2, len(pos))) + rng.sample(neg, min(n - n // 2, len(neg)))
+    rng.shuffle(rows)
+    for row in rows:
+        yield {
+            "state": {"user_message": row["user_input"][:3000]},
+            "questions": {
+                "toxic": _noul(
+                    "Is this user message toxic (harassing, hateful, sexually explicit, or seeking harmful content)?"
+                )
+            },
+            "labels": {"toxic": bool(int(row["toxicity"]))},
+            "source": "ext_toxic_chat",
+        }
+
+
+def mnli_mismatched(n: int, seed: int, split: str) -> Iterator[dict]:
+    """Textual entailment on out-of-domain genres (MNLI mismatched validation)."""
+    from datasets import load_dataset
+
+    ds = load_dataset("nyu-mll/multi_nli", split="validation_mismatched")
+    names = ["entailment", "neutral", "contradiction"]
+    for row in _shuffled(ds, seed + 13).select(range(min(n, len(ds)))):
+        yield {
+            "state": {"premise": row["premise"], "hypothesis": row["hypothesis"]},
+            "questions": {
+                "relation": _choice(
+                    "Given the `premise`, is the `hypothesis` entailed, neutral, or contradicted?",
+                    {
+                        "entailment": "the premise implies the hypothesis",
+                        "neutral": "the premise neither implies nor contradicts it",
+                        "contradiction": "the premise rules it out",
+                    },
+                )
+            },
+            "labels": {"relation": names[int(row["label"])]},
+            "source": "ext_mnli_mismatched",
+        }
+
+
+def yelp_stars(n: int, seed: int, split: str) -> Iterator[dict]:
+    """Ordinal rating from review text: a Score with five levels."""
+    from datasets import load_dataset
+
+    ds = load_dataset("Yelp/yelp_review_full", split="test")
+    levels = [
+        "1 star: terrible",
+        "2 stars: poor",
+        "3 stars: mixed",
+        "4 stars: good",
+        "5 stars: excellent",
+    ]
+    for row in _shuffled(ds, seed + 14).select(range(min(n, len(ds)))):
+        yield {
+            "state": {"review": row["text"][:3000]},
+            "questions": {"stars": _score("How many stars did the reviewer give?", levels)},
+            "labels": {"stars": int(row["label"])},
+            "source": "ext_yelp_stars",
+        }
+
+
+RECIPES.update(
+    {
+        "civil_soft": civil_soft,
+        "helpsteer2_multi": helpsteer2_multi,
+        "go_emotions_soft": go_emotions_soft,
+        "quality": quality,
+    }
+)
+EXTERNAL = {
+    "bitext_support": bitext_support,
+    "toxic_chat": toxic_chat,
+    "mnli_mismatched": mnli_mismatched,
+    "yelp_stars": yelp_stars,
+}
+
 
 def parse_counts(spec: str, default: int) -> dict[str, int]:
     """'a,b,c=1200' -> {a: default, b: default, c: 1200}"""
@@ -937,6 +1254,10 @@ def main(argv=None):
     m.add_argument("--out", required=True)
     m.add_argument("--eval-out", default=None)
     m.add_argument("--seed", type=int, default=0)
+    x = sub.add_parser("external", help="build the external test sets (never used in training)")
+    x.add_argument("--out", required=True)
+    x.add_argument("--per-source", type=int, default=300)
+    x.add_argument("--seed", type=int, default=0)
     c = sub.add_parser(
         "check-overlap", help="flag training rows that share 8-grams with benchmark items"
     )
@@ -945,6 +1266,14 @@ def main(argv=None):
     c.add_argument("--n", type=int, default=8)
     args = ap.parse_args(argv)
 
+    if args.cmd == "external":
+        rows = []
+        for name, fn in EXTERNAL.items():
+            got = list(fn(args.per_source, args.seed, "test"))
+            print(f"  {name:<20} {len(got):>6} examples")
+            rows.extend(got)
+        print(f"wrote {write(rows, args.out)} rows to {args.out}")
+        return 0
     if args.cmd == "check-overlap":
         hits = check_overlap(args.train, args.against, args.n)
         print(f"{hits} overlapping rows")
