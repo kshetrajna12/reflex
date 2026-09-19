@@ -77,3 +77,26 @@ model's behaviour in ways the external sets punish. The optimised prompt is kept
 An earlier GEPA run without the leakage guard produced a system prompt that began
 "You are an expert evaluator for the HelpSteer2 dataset", which is the obvious version of
 the failure; the guard and the general-purpose reflection template were added in response.
+
+## 4. Post-hoc calibration transfers no better than weights do
+
+`reflex-calibrate refit --val runs/mix3_eval.jsonl --out runs/raw-calibration` fits
+per-primitive temperatures (noul 3.19, choice 1.44, score 2.48) and the calibration head
+for the frozen model on our held-out mix. On that mix, ECE falls from 0.108 to 0.028.
+
+| | raw, T = 1 | raw + fitted calibration |
+|---|---|---|
+| external: support intents ECE | 0.035 | 0.085 |
+| external: MNLI mismatched ECE | 0.054 | 0.123 |
+| external: toxic-chat ECE | 0.104 | 0.090 |
+| external: Yelp stars ECE | 0.111 | 0.189 |
+| public standard tier ECE | 0.055 | 0.214 |
+| public hard tier ECE | 0.143 | **0.102** |
+| public hard tier fidelity | 0.726 | **0.730** |
+
+The fitted temperatures are right for inputs that look like our mix (hard, ambiguous
+items: the benchmark's hard tier improves, and that is the tier its calibration axis is
+computed on) and wrong for easier inputs, which they over-soften. A temperature is a
+property of a distribution, not of a model. The recommendation that follows is the one
+the README already makes: fit `calibration.json` on a few hundred labelled examples from
+the workload you will run, and expect calibration measured elsewhere to be optimistic.
