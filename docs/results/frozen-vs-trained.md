@@ -45,3 +45,35 @@ it is the wording, and wording is worth ±8 points on this model.
   epoch, attention-only), and always measure on held-out sets from *other* domains.
 * Report external-set numbers first. Held-out splits of the training sources looked
   great for mix2 (82.7 % accuracy) while it was the worst adapter on hard external items.
+
+## 3. Prompt optimisation with GEPA: a clean negative result
+
+`reflex-optimize` ran GEPA (gepa 0.1.4) over the prompt's named components on the frozen
+model: 480 training and 240 validation rows drawn from our own held-out mix across all
+twelve sources, a local reflection LM with a general-purpose instruction, dataset names
+stripped from the feedback, and a hard rejection of any candidate that names a dataset.
+Twenty-seven candidates were accepted; validation score rose from 0.628 to 0.649. The
+winning wording was sensible and general ("read the full State, weigh all options,
+distribute probability when the State is ambiguous").
+
+It did not transfer:
+
+| | default prompt | GEPA prompt |
+|---|---|---|
+| support intents (ext) | 0.910 | 0.897 |
+| MNLI mismatched (ext) | 0.840 | 0.807 |
+| toxic-chat (ext) | 0.787 | 0.793 |
+| Yelp stars (ext) | 0.650 | 0.640 |
+| public standard tier | 0.931 | 0.889 |
+| public hard tier | 0.640 | 0.586 |
+
+A two-point gain on rows from the training distribution became a two-to-five-point loss
+everywhere else. This is the mild form of the same lesson as fine-tuning: any search
+driven by our mix fits our mix. The default prompt is already close to a local optimum
+for this model, and wording changes large enough to move the validation score move the
+model's behaviour in ways the external sets punish. The optimised prompt is kept as
+`prompts/gepa-v1.rejected.json` for reference.
+
+An earlier GEPA run without the leakage guard produced a system prompt that began
+"You are an expert evaluator for the HelpSteer2 dataset", which is the obvious version of
+the failure; the guard and the general-purpose reflection template were added in response.
