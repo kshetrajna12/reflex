@@ -29,6 +29,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import logging
+import os
 import random
 import threading
 import time
@@ -264,6 +265,15 @@ class Engine:
             AutoTokenizer,
         )
 
+        if str(device).startswith("mps"):
+            # transformers' threaded weight loader copies to the device from 4 threads at
+            # once, which hangs or segfaults on MPS. Load serially there.
+            os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
+            # By default torch lets MPS allocate 1.7x the recommended working set, which is more
+            # than physical RAM on most Macs: an oversized model then swaps the machine into a
+            # watchdog reboot. Cap it so loading fails with an out-of-memory error instead.
+            os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.7")
+            os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.6")
         tok = AutoTokenizer.from_pretrained(model_id)
         cfg = AutoConfig.from_pretrained(model_id)
         multimodal = getattr(cfg, "vision_config", None) is not None
@@ -275,6 +285,10 @@ class Engine:
         model = loader.from_pretrained(
             model_id, dtype=dtype, device_map=device, attn_implementation=attn_implementation
         )
+        if next(model.parameters()).device.type == "mps":
+            from reflex.mps import patch_delta_rule
+
+            patch_delta_rule(model)
         if adapter_path:
             from peft import PeftModel
 

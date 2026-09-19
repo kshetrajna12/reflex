@@ -123,6 +123,7 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=8008)
     ap.add_argument("--max-pack-tokens", type=int, default=8192)
     ap.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float16", "float32"])
+    ap.add_argument("--device", default="cuda", choices=["cuda", "mps", "cpu"])
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 
@@ -133,6 +134,7 @@ def main(argv=None):
     engine = Engine.load(
         args.model,
         dtype=getattr(torch, args.dtype),
+        device=args.device,
         calibration_path=args.calibration,
         adapter_path=args.adapter,
         max_pack_tokens=args.max_pack_tokens,
