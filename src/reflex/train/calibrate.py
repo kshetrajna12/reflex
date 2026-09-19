@@ -82,12 +82,18 @@ def evaluate(engine, exs: list[Example], temperature: float = 1.0, logits=None):
         logits = np.full((len(rows), K), -1e9)
         for i, r in enumerate(rows):
             logits[i, : len(r)] = r
+    probs = np.stack([softmax(r, temperature) for r in logits])
+    labels = np.array([e.hard_label for e in exs])
+    return evaluate_probs(exs, probs, logits), logits, labels
+
+
+def evaluate_probs(exs: list[Example], probs: np.ndarray, logits: np.ndarray) -> dict[str, str]:
+    """Score given probability rows (any temperature scheme) overall and per source."""
     K = logits.shape[1]
     labels = np.array([e.hard_label for e in exs])
     targets = np.zeros((len(exs), K))
     for i, e in enumerate(exs):
         targets[i, : len(e.target)] = e.target
-    probs = np.stack([softmax(r, temperature) for r in logits])
     soft = np.array([e.target.max() < 0.999 for e in exs])
 
     def line(idx):
@@ -104,7 +110,7 @@ def evaluate(engine, exs: list[Example], temperature: float = 1.0, logits=None):
         by_src[e.source or "?"].append(i)
     for src, idx in sorted(by_src.items()):
         out[src] = line(np.array(idx))
-    return out, logits, labels
+    return out
 
 
 def print_reports(title: str, reports: dict[str, str]) -> None:
@@ -226,6 +232,8 @@ def train(args):
                         time.perf_counter() - t0,
                     )
         model.eval()
+        if args.epochs > 1 and epoch < args.epochs - 1:
+            model.save_pretrained(out_dir / f"epoch{epoch + 1}")  # keep earlier epochs to compare
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -237,19 +245,72 @@ def train(args):
     if val_ex:
         reports, logits, labels = evaluate(engine, val_ex)
         print_reports("after training", reports)
-        T = fit_temperature(logits, labels)
-        reports_t, _, _ = evaluate(engine, val_ex, temperature=T, logits=logits)
-        np.savez(out / "eval_logits.npz", logits=logits, labels=labels)  # re-score offline
-        print_reports(f"after training + temperature T={T:.3f}", reports_t)
+        # One temperature per primitive: yes/no, pick-one and ordered-scale questions
+        # are over- or under-confident by different amounts, and a single scalar
+        # trades them off against each other.
+        kinds = np.array([e.branch.kind for e in val_ex])
+        temps = {}
+        for kind in ("noul", "choice", "score"):
+            m = kinds == kind
+            temps[kind] = fit_temperature(logits[m], labels[m]) if m.sum() >= 20 else 1.0
+        probs_t = np.stack([softmax(r, temps[k]) for r, k in zip(logits, kinds, strict=True)])
+        reports_t = evaluate_probs(val_ex, probs_t, logits)
+        np.savez(out / "eval_logits.npz", logits=logits, labels=labels, kinds=kinds)
+        print_reports(
+            "after training + per-primitive temperature "
+            + ", ".join(f"{k}={v:.2f}" for k, v in temps.items()),
+            reports_t,
+        )
         with open(out / "calibration.json", "w") as f:
-            json.dump({"temperature": {"noul": T, "choice": T, "score": T}}, f, indent=2)
+            json.dump({"temperature": temps}, f, indent=2)
         with open(out / "eval_report.txt", "w") as f:
             f.writelines(f"### {name}\n{text}\n\n" for name, text in reports.items())
+
+
+def refit(args):
+    """Re-fit per-primitive temperatures for an existing adapter on a labelled set,
+    without training. Use it when you have new held-out data, or when a run was
+    calibrated with a single global temperature."""
+    from reflex.engine import Engine
+
+    engine = Engine.load(
+        args.model, adapter_path=args.adapter, max_pack_tokens=args.max_pack_tokens
+    )
+    val_ex = examples(args.val, engine.fmt)
+    reports, logits, labels = evaluate(engine, val_ex)
+    print_reports("uncalibrated", reports)
+    kinds = np.array([e.branch.kind for e in val_ex])
+    temps = {}
+    for kind in ("noul", "choice", "score"):
+        m = kinds == kind
+        temps[kind] = fit_temperature(logits[m], labels[m]) if m.sum() >= 20 else 1.0
+    probs_t = np.stack([softmax(r, temps[k]) for r, k in zip(logits, kinds, strict=True)])
+    print_reports(
+        "per-primitive temperature " + ", ".join(f"{k}={v:.2f}" for k, v in temps.items()),
+        evaluate_probs(val_ex, probs_t, logits),
+    )
+    out = Path(args.out or args.adapter)
+    out.mkdir(parents=True, exist_ok=True)
+    np.savez(out / "eval_logits.npz", logits=logits, labels=labels, kinds=kinds)
+    with open(out / "calibration.json", "w") as f:
+        json.dump({"temperature": temps}, f, indent=2)
+    print(f"wrote {out / 'calibration.json'}: {temps}")
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser(
+        "refit", help="re-fit per-primitive temperatures for an adapter on a labelled set"
+    )
+    r.add_argument("--model", default="Qwen/Qwen3.5-4B")
+    r.add_argument("--adapter", required=True)
+    r.add_argument("--val", required=True)
+    r.add_argument(
+        "--out", default=None, help="where to write calibration.json (default: the adapter dir)"
+    )
+    r.add_argument("--max-pack-tokens", type=int, default=4096)
 
     m = sub.add_parser("make-mmlu", help="write MMLU as reflex training JSONL")
     m.add_argument("--out", required=True)
@@ -283,6 +344,8 @@ def main(argv=None):
     if args.cmd == "make-mmlu":
         n = mmlu_to_jsonl(args.out, args.split, args.n, args.seed)
         print(f"wrote {n} items to {args.out}")
+    elif args.cmd == "refit":
+        refit(args)
     else:
         if args.full and args.lr >= 1e-4:
             log.warning("--full with lr %.0e is aggressive; 1e-5 is a safer start", args.lr)
