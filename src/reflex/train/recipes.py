@@ -785,8 +785,10 @@ def _policy(rng, dom):
             lambda c: o[4] if c["category"] in excluded else None,
         ),
         (
-            "A request without supporting documentation is refused, unless the requester holds the "
-            f"{senior} level, in which case documentation may follow within 10 days.",
+            (
+                "A request without supporting documentation is refused, unless the requester holds the "
+                f"{senior} level, in which case documentation may follow within 10 days."
+            ),
             lambda c: o[2] if (not c["receipt"] and c["employee_level"] != senior) else None,
         ),
         (

@@ -81,12 +81,12 @@ class SystemOneRequest(BaseModel):
     state: Text
     questions: dict[str, Question]
     # reflex extensions (ignored by the real API)
-    permutations: int = Field(
-        default=1,
+    permutations: int | None = Field(
+        default=None,
         ge=1,
         le=8,
         description="Average choice/score readout over N shuffled option orders to reduce "
-        "position bias. Costs N branches per question.",
+        "position bias. Costs N branches per question. Default: the server's setting.",
     )
 
     @model_validator(mode="after")

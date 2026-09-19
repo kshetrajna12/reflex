@@ -106,6 +106,13 @@ def main(argv=None):
     ap.add_argument(
         "--served-name", default=None, help="name reported in responses (default: the model id)"
     )
+    ap.add_argument(
+        "--permutations",
+        type=int,
+        default=1,
+        help="default option-order averaging for requests that do not set it "
+        "(2 halves letter-position bias at 2x branch cost)",
+    )
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8008)
     ap.add_argument("--max-pack-tokens", type=int, default=8192)
@@ -123,6 +130,7 @@ def main(argv=None):
         calibration_path=args.calibration,
         adapter_path=args.adapter,
         max_pack_tokens=args.max_pack_tokens,
+        default_permutations=args.permutations,
     )
     if args.served_name:
         engine.model_name = args.served_name

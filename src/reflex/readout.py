@@ -22,13 +22,19 @@ from reflex.schema import ChoiceAnswer, NoulAnswer, ScoreAnswer, ScoreQuestion
 
 @dataclass
 class Calibration:
-    """Per-primitive temperature applied to the restricted label logits."""
+    """Temperature applied to the restricted label logits: per primitive, or, when a
+    fitted `head` is present, per question (see reflex.calibration_head)."""
 
     temperature: dict[str, float] = field(
         default_factory=lambda: {"noul": 1.0, "choice": 1.0, "score": 1.0}
     )
+    head: list[float] | None = None
 
-    def t(self, kind: str) -> float:
+    def t(self, kind: str, logits: np.ndarray | None = None, state_tokens: int = 0) -> float:
+        if self.head is not None and logits is not None:
+            from reflex.calibration_head import features, temperature
+
+            return temperature(np.asarray(self.head), features(kind, logits, state_tokens))
         return float(self.temperature.get(kind, 1.0))
 
     @classmethod
@@ -36,12 +42,13 @@ class Calibration:
         if path is None or not Path(path).exists():
             return cls()
         with open(path) as f:
-            return cls(temperature=json.load(f)["temperature"])
+            d = json.load(f)
+        return cls(temperature=d["temperature"], head=d.get("head"))
 
     def save(self, path: str | Path) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
-            json.dump({"temperature": self.temperature}, f, indent=2)
+            json.dump({"temperature": self.temperature, "head": self.head}, f, indent=2)
 
 
 def softmax(logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
@@ -65,7 +72,9 @@ def confidence(p: np.ndarray) -> float:
     return float(max(0.0, min(1.0, 1.0 - h / math.log(n))))
 
 
-def merge_branches(kind: str, results: list[tuple[Branch, np.ndarray]], cal: Calibration):
+def merge_branches(
+    kind: str, results: list[tuple[Branch, np.ndarray]], cal: Calibration, state_tokens: int = 0
+):
     """Average probability over permuted branches of the same question, keyed by option.
 
     `results` = [(branch, restricted_logits_in_branch_label_order), ...]
@@ -73,7 +82,7 @@ def merge_branches(kind: str, results: list[tuple[Branch, np.ndarray]], cal: Cal
     """
     acc: dict[Any, float] = {}
     for br, logits in results:
-        probs = softmax(logits, cal.t(kind))
+        probs = softmax(logits, cal.t(kind, logits, state_tokens))
         for k, pr in zip(br.keys, probs):
             acc[k] = acc.get(k, 0.0) + float(pr)
     n = len(results)

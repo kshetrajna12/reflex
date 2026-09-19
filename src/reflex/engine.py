@@ -200,6 +200,7 @@ class Engine:
         processor=None,
         max_image_pixels: int = 1024 * 1024,
         strategy: str | None = None,
+        default_permutations: int = 1,
     ):
         self.model = model
         self.tok = tokenizer
@@ -214,6 +215,7 @@ class Engine:
             size = dict(getattr(processor.image_processor, "size", {}) or {})
             size["longest_edge"] = max_image_pixels
             processor.image_processor.size = size
+        self.default_permutations = default_permutations
         self.strategy = strategy or ("batched" if self.is_hybrid else "packed")
         if self.strategy not in ("packed", "batched"):
             raise ValueError(f"unknown strategy {self.strategy!r}")
@@ -493,7 +495,9 @@ class Engine:
         rng = random.Random(0)
         branches: list[Branch] = []
         for qid, q in req.questions.items():
-            branches.extend(build_branches(qid, q, self.fmt, req.permutations, rng))
+            branches.extend(
+                build_branches(qid, q, self.fmt, req.permutations or self.default_permutations, rng)
+            )
         branch_ids = [self._encode(b.text) for b in branches]
 
         entry, hit = self.encode_state(req.state)
@@ -505,7 +509,7 @@ class Engine:
 
         answers = {}
         for qid, q in req.questions.items():
-            key_probs = merge_branches(q.type, per_q[qid], self.cal)
+            key_probs = merge_branches(q.type, per_q[qid], self.cal, state_tokens=len(entry.ids))
             answers[qid] = to_answer(q.type, key_probs, q)
 
         q_tokens = sum(len(b) for b in branch_ids)
