@@ -1,8 +1,10 @@
 """MPS memory defaults must stay valid next to whatever the user already set. Runs on CPU."""
 
 import pytest
+from fastapi.testclient import TestClient
 
-from reflex.mps import HIGH_WATERMARK, LOW_WATERMARK, memory_watermarks
+from reflex.mps import HIGH_WATERMARK, LOW_WATERMARK, is_out_of_memory, memory_watermarks
+from reflex.server import create_app
 
 
 def test_defaults_when_nothing_is_set():
@@ -42,3 +44,46 @@ def test_a_valid_user_pair_is_left_alone():
 def test_an_invalid_pair_fails_with_a_clear_message(env):
     with pytest.raises(ValueError, match="PYTORCH_MPS"):
         memory_watermarks(env)
+
+
+MPS_OOM = (
+    "MPS backend out of memory (MPS allocated: 9.00 GiB, other allocations: 464.00 KiB, "
+    "max allowed: 9.32 GiB). Tried to allocate 1024.00 MiB on private pool."
+)
+REQ = {"state": "x", "questions": {"q": {"type": "noul", "instructions": "?"}}}
+
+
+class FailingEngine:
+    model_name = "stub"
+    device = "mps"
+    strategy = "batched"
+
+    class cal:
+        temperature = {"noul": 1.0, "choice": 1.0, "score": 1.0}  # noqa: RUF012
+
+    def __init__(self, error):
+        self.error = error
+
+    def answer(self, req):
+        raise self.error
+
+
+def test_recognises_only_the_mps_allocation_failure():
+    assert is_out_of_memory(RuntimeError(MPS_OOM))
+    assert not is_out_of_memory(RuntimeError("invalid low watermark ratio 1"))
+    assert not is_out_of_memory(ValueError(MPS_OOM))
+
+
+def test_mps_out_of_memory_is_a_529_like_cuda():
+    client = TestClient(create_app(FailingEngine(RuntimeError(MPS_OOM))))
+    assert client.post("/v1/systemone", json=REQ).status_code == 529
+
+
+def test_other_runtime_errors_still_propagate():
+    app = create_app(FailingEngine(RuntimeError("shape mismatch")))
+    assert (
+        TestClient(app, raise_server_exceptions=False).post("/v1/systemone", json=REQ).status_code
+        == 500
+    )
+    with pytest.raises(RuntimeError, match="shape mismatch"):
+        TestClient(app).post("/v1/systemone", json=REQ)

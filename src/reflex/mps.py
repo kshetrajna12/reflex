@@ -65,6 +65,12 @@ def memory_watermarks(env: Mapping[str, str]) -> dict[str, str]:
     return chosen
 
 
+def is_out_of_memory(error: BaseException) -> bool:
+    """MPS reports an allocation failure as a plain RuntimeError ("MPS backend out of memory
+    ..."), not as torch.OutOfMemoryError, so it has to be recognised by its message."""
+    return isinstance(error, RuntimeError) and "MPS backend out of memory" in str(error)
+
+
 def unit_lower_inverse(system: torch.Tensor) -> torch.Tensor:
     """(I + L)^-1 for the strictly lower part L of `system` [..., n, n], n a power of two.
 
