@@ -29,7 +29,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import logging
-import random
 import threading
 import time
 from collections import OrderedDict
@@ -219,6 +218,13 @@ class Engine:
         self.model = model
         self.tok = tokenizer
         self.fmt = fmt
+        # prompt-ensemble readout (reflex.ensemble): question-side wording variants whose
+        # distributions are averaged; [fmt] alone is the plain single-prompt readout
+        self.variants: list[PromptFormat] = [fmt]
+        self.last_disagreement: dict[str, float] = {}
+        # System Two on demand: when the ensemble's wordings disagree by more than this,
+        # the question is re-answered with the thinking readout (think_tokens must be > 0)
+        self.think_if_disagree: float | None = None
         self.cal = calibration or Calibration()
         self.max_pack_tokens = max_pack_tokens
         self.max_branch_tokens = max_branch_tokens
@@ -258,6 +264,7 @@ class Engine:
         adapter_path: str | None = None,
         prompt_style: str = "markdown",
         prompt_texts: str | dict | None = None,
+        ensemble: str | list[dict] | None = None,
         **engine_kwargs,
     ) -> Engine:
         from transformers import (
@@ -295,6 +302,11 @@ class Engine:
         )
         cal = Calibration.load(calibration_path)
         eng = cls(model, tok, fmt, cal, model_name=model_id, processor=processor, **engine_kwargs)
+        if ensemble:
+            from reflex.ensemble import load_ensemble, variant_formats
+
+            eng.variants = variant_formats(fmt, load_ensemble(ensemble))
+            log.info("prompt ensemble: %d variants", len(eng.variants))
         log.info(
             "loaded %s (chat=%s no_think=%s multimodal=%s strategy=%s) on %s",
             model_id,
@@ -513,17 +525,18 @@ class Engine:
             return self._answer(req)
 
     def _answer(self, req: SystemOneRequest) -> SystemOneResponse:
-        rng = random.Random(0)
         branches: list[Branch] = []
         for qid, q in req.questions.items():
-            branches.extend(
-                build_branches(qid, q, self.fmt, req.permutations or self.default_permutations, rng)
-            )
+            for fmt in self.variants:
+                branches.extend(
+                    build_branches(qid, q, fmt, req.permutations or self.default_permutations)
+                )
         branch_ids = [self._encode(b.text) for b in branches]
 
         entry, hit = self.encode_state(req.state)
         per_q: dict[str, list[tuple[Branch, np.ndarray]]] = {}
-        if self.think_tokens:
+        if self.think_tokens and self.think_if_disagree is None:
+            # unconditional System Two: every branch reasons first
             from reflex.think import think_logits
 
             rows = think_logits(self, [(req.state, b) for b in branches], self.think_tokens)
@@ -535,8 +548,29 @@ class Engine:
                 per_q.setdefault(b.qid, []).append((b, self.restrict(row, b).cpu().numpy()))
 
         answers = {}
+        self.last_disagreement = {}
         for qid, q in req.questions.items():
-            key_probs = merge_branches(q.type, per_q[qid], self.cal, state_tokens=len(entry.ids))
+            if len(per_q[qid]) > 1:
+                from reflex.ensemble import disagreement
+
+                self.last_disagreement[qid] = disagreement(
+                    per_q[qid], self.cal, q.type, len(entry.ids)
+                )
+            results = per_q[qid]
+            if (
+                self.think_if_disagree is not None
+                and self.think_tokens
+                and self.last_disagreement.get(qid, 0.0) > self.think_if_disagree
+            ):
+                from reflex.think import think_logits
+
+                # escalate: the default wording's branches, answered after reasoning
+                own = [b for b in branches if b.qid == qid][
+                    : max(1, len(results) // len(self.variants))
+                ]
+                rows = think_logits(self, [(req.state, b) for b in own], self.think_tokens)
+                results = list(zip(own, rows))
+            key_probs = merge_branches(q.type, results, self.cal, state_tokens=len(entry.ids))
             answers[qid] = to_answer(q.type, key_probs, q)
 
         q_tokens = sum(len(b) for b in branch_ids)

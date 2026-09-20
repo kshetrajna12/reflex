@@ -1,0 +1,12 @@
+{
+  "_comment": "Question-side wording variants for the prompt-ensemble readout (reflex.ensemble). The first is the default prompt; the others change headings, the yes/no readout and the ask lines. None touch the state heading or system prompt, so all share one state cache.",
+  "variants": [
+    {},
+    {"question_heading": "# Question", "noul_readout": "yesno"},
+    {"question_heading": "# Question", "options_heading": "# Choices",
+     "choice_ask": "Which option fits best? Answer with its letter only.",
+     "score_ask": "Which level fits best? Answer with its letter only.",
+     "noul_readout": "letters"},
+    {"question_heading": "# Criterion", "noul_readout": "yesno", "noul_ask": "Answer Yes or No."}
+  ]
+}

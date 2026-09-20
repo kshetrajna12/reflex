@@ -86,6 +86,58 @@ def evaluate(engine, exs: list[Example], temperature: float = 1.0, logits=None):
     return evaluate_probs(exs, probs, logits), logits, labels
 
 
+def evaluate_ensemble(engine, rows: list[dict], permutations: int = 1, seed: int = 0):
+    """Ensemble readout on labelled rows: every question is asked with each of
+    `engine.variants` x `permutations`, the distributions are averaged (with the engine's
+    calibration), and the merged answer is scored. Returns (examples aligned to the first
+    branch of each question, probs, disagreement per question)."""
+    from reflex.ensemble import disagreement, merged_probs_for_keys
+    from reflex.prompt import build_branches
+    from reflex.schema import SystemOneRequest
+    from reflex.train.data import target_vector
+
+    groups = []
+    flat = []
+    for ri, row in enumerate(rows):
+        req = SystemOneRequest(state=row["state"], questions=row["questions"])
+        _, sids, _, _ = engine.state_inputs(req.state)
+        for qid, q in req.questions.items():
+            if qid not in row.get("labels", {}):
+                continue
+            brs = []
+            for fmt in engine.variants:
+                brs.extend(build_branches(qid, q, fmt, permutations, seed=seed * 100003 + ri))
+            first = brs[0]
+            ex = Example(
+                req.state,
+                first,
+                target_vector(q.type, row["labels"][qid], first.keys),
+                row.get("source", ""),
+            )
+            idx = list(range(len(flat), len(flat) + len(brs)))
+            flat.extend((req.state, b) for b in brs)
+            groups.append((ex, idx, q.type, brs, len(sids)))
+    log.info(
+        "ensemble eval: %d questions, %d branches (%d variants x %d permutations)",
+        len(groups),
+        len(flat),
+        len(engine.variants),
+        permutations,
+    )
+    rows_logits = engine.label_logits_batch(flat)
+    K = max(len(g[0].branch.keys) for g in groups)
+    probs = np.zeros((len(groups), K))
+    dis = np.zeros(len(groups))
+    exs = []
+    for gi, (ex, idx, kind, brs, n_state) in enumerate(groups):
+        results = [(brs[j], rows_logits[i]) for j, i in enumerate(idx)]
+        p = merged_probs_for_keys(kind, results, engine.cal, ex.branch.keys, n_state)
+        probs[gi, : len(p)] = p
+        dis[gi] = disagreement(results, engine.cal, kind, n_state)
+        exs.append(ex)
+    return exs, probs, dis
+
+
 def evaluate_probs(exs: list[Example], probs: np.ndarray, logits: np.ndarray) -> dict[str, str]:
     """Score given probability rows (any temperature scheme) overall and per source."""
     K = logits.shape[1]
@@ -274,10 +326,13 @@ def fit_calibration(engine, exs: list[Example], logits: np.ndarray, labels: np.n
     from reflex.calibration_head import fit as fit_head
 
     kinds, n_opts, st = item_meta(engine, exs)
+    targets = np.zeros_like(logits)
+    for i, e in enumerate(exs):
+        targets[i, : len(e.target)] = e.target
     temps = {}
     for kind in ("noul", "choice", "score"):
         m = kinds == kind
-        temps[kind] = fit_temperature(logits[m], labels[m]) if m.sum() >= 20 else 1.0
+        temps[kind] = fit_temperature(logits[m], targets[m]) if m.sum() >= 20 else 1.0
     probs_t = np.stack([softmax(r, temps[k]) for r, k in zip(logits, kinds, strict=True)])
     print_reports(
         "per-primitive temperature " + ", ".join(f"{k}={v:.2f}" for k, v in temps.items()),
@@ -323,7 +378,32 @@ def evaluate_adapter(args):
         prompt_style=args.prompt_style,
         prompt_texts=args.prompt_texts,
         think_tokens=args.think,
+        ensemble=args.ensemble,
     )
+    if args.ensemble or args.permutations > 1:
+        from reflex.train.data import read_jsonl
+
+        exs, probs, dis = evaluate_ensemble(engine, list(read_jsonl(args.val)), args.permutations)
+        fake_logits = np.log(np.clip(probs, 1e-9, 1.0))
+        print_reports(
+            f"ensemble ({len(engine.variants)} variants x {args.permutations} orders, engine calibration)",
+            evaluate_probs(exs, probs, fake_logits),
+        )
+        correct = np.array([int(p.argmax()) == e.hard_label for p, e in zip(probs, exs)])
+        for lo, hi in [(0.0, 0.05), (0.05, 0.15), (0.15, 0.3), (0.3, 1.01)]:
+            m = (dis >= lo) & (dis < hi)
+            if m.any():
+                print(
+                    f"  disagreement [{lo:.2f},{hi:.2f}): n={int(m.sum())} acc={correct[m].mean():.3f} mean_maxp={probs[m].max(1).mean():.3f}"
+                )
+        if args.dump:
+            np.savez(
+                args.dump,
+                probs=probs,
+                disagreement=dis,
+                labels=np.array([e.hard_label for e in exs]),
+            )
+        return
     exs = examples(args.val, engine.fmt)
     reports, logits, labels = evaluate(engine, exs)
     print_reports("raw (T=1)", reports)
@@ -389,6 +469,12 @@ def main(argv=None):
         type=int,
         default=0,
         help="System Two readout: reasoning tokens per branch (0 = off)",
+    )
+    ev.add_argument(
+        "--ensemble", default=None, help="prompt-ensemble variants json (reflex.ensemble)"
+    )
+    ev.add_argument(
+        "--permutations", type=int, default=1, help="option orders per question (merged)"
     )
     r.add_argument("--model", default="Qwen/Qwen3.5-4B")
     r.add_argument(
