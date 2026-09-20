@@ -44,4 +44,9 @@ in-the-wild inputs through the same prompt the student is served with.
 
 ## Results
 
-*(pending)*
+First run (2026-09-20): the student's held-out agreement with the 27B teacher rose from
+0.65 to 0.85 and it moved toward the teacher on all four external sets with no collapse,
+the first adapter to do so. On the benchmark's hard tier it did *not* improve (0.613 vs
+0.658 frozen, teacher 0.703). Full numbers and the item-level analysis:
+[results/lora-distill-qwen3.5-4b.md](results/lora-distill-qwen3.5-4b.md); teacher gates:
+[results/teachers-27b-and-4b-think.md](results/teachers-27b-and-4b-think.md).
