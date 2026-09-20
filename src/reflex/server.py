@@ -84,7 +84,11 @@ def create_app(engine, api_key: str | None = None) -> FastAPI:
             resp.usage.question_tokens,
             ms,
         )
-        return JSONResponse(resp.model_dump(), headers={"x-reflex-latency-ms": f"{ms:.1f}"})
+        # exclude_none keeps `path` out of the payload when the server is not cascading,
+        # so an existing client sees the response shape it was written against.
+        return JSONResponse(
+            resp.model_dump(exclude_none=True), headers={"x-reflex-latency-ms": f"{ms:.1f}"}
+        )
 
     return app
 
@@ -136,6 +140,12 @@ def main(argv=None):
         "--ensemble", default=None, help="prompt-ensemble variants json (reflex.ensemble)"
     )
     ap.add_argument(
+        "--escalate",
+        default=None,
+        help="escalator.json from reflex-escalate: with --think, the fitted trigger decides "
+        "which questions take the reasoning path (replaces --think-if-disagree)",
+    )
+    ap.add_argument(
         "--think-if-disagree",
         type=float,
         default=None,
@@ -185,9 +195,22 @@ def main(argv=None):
     if args.served_name:
         engine.model_name = args.served_name
     if args.think_if_disagree is not None:
-        if not (args.ensemble and args.think):
-            raise SystemExit("--think-if-disagree needs both --ensemble and --think")
+        # disagreement needs more than one reading per question: wordings, orders, or both
+        if not args.think or not (args.ensemble or (args.permutations or 1) > 1):
+            raise SystemExit("--think-if-disagree needs --think and --ensemble or --permutations>1")
         engine.think_if_disagree = args.think_if_disagree
+    if args.escalate:
+        if not args.think:
+            raise SystemExit("--escalate needs --think")
+        from reflex.escalate import Escalator
+
+        engine.escalator = Escalator.load(args.escalate)
+        log.info(
+            "escalation trigger %s: threshold %.4f (fitted budget %.0f%%)",
+            args.escalate,
+            engine.escalator.threshold,
+            100 * engine.escalator.budget,
+        )
     uvicorn.run(
         create_app(engine, api_key=args.api_key),
         host=args.host,
