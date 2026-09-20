@@ -1,11 +1,19 @@
 """System Two readout: let the model think first, then read the same label logits.
 
-reflex normally suppresses reasoning (an empty `<think>` block) and reads the answer
-distribution from the next-token logits, which is what makes it fast. For an *offline
-teacher* speed does not matter: here each branch generates a bounded `<think>` block,
-the block is closed, and the label logits are read from the position right after it. The
-output has exactly the same shape as the fast path, so a thinking teacher's answers are
-valid soft targets for a non-thinking student (System 2 -> System 1 distillation).
+**This is an offline tool, never a serving mode.** reflex is a System One model: the
+server answers every request with one fast forward pass and no reasoning. Nothing here is
+reachable from `reflex-serve`; it exists for two offline jobs only, which construct the
+readout explicitly:
+
+  * `reflex-distill label --think N` - a thinking *teacher* labels a corpus. Speed does
+    not matter there, and a stronger teacher makes better soft targets.
+  * `reflex-calibrate eval --think N` - an experiment, to measure what reasoning would
+    buy on a benchmark.
+
+Each branch generates a bounded `<think>` block, the block is closed, and the label
+logits are read from the position right after it. The output has exactly the same shape
+as the fast path, so a thinking teacher's answers are valid soft targets for a
+non-thinking student (System 2 -> System 1 distillation).
 
 No state cache is used (every branch re-reads its state), and generation is batched with
 left padding. Works for any chat model whose template thinks in `<think>...</think>`.
@@ -22,7 +30,9 @@ import numpy as np
 import torch
 
 from reflex.engine import right_pad
-from reflex.prompt import Branch
+from reflex.prompt import Branch, build_branches
+from reflex.readout import merge_branches, to_answer
+from reflex.schema import SystemOneRequest, SystemOneResponse, Usage
 
 log = logging.getLogger("reflex.think")
 
@@ -94,3 +104,54 @@ def think_logits(
                 100 * n_closed / done,
             )
     return results  # type: ignore[return-value]
+
+
+def think_readout(engine, max_new_tokens: int, batch_size: int = 16):
+    """A readout callable `(items) -> [logits]` that reasons before reading.
+
+    Offline only. Hand it to the evaluator in place of `engine.label_logits_batch` to
+    score a benchmark with reasoning; the serving path never sees it.
+    """
+
+    def readout(items: Sequence[tuple[Any, Branch]]) -> list[np.ndarray]:
+        return think_logits(engine, items, max_new_tokens, batch_size)
+
+    return readout
+
+
+def think_answer(
+    engine, req: SystemOneRequest, max_new_tokens: int, batch_size: int = 16
+) -> SystemOneResponse:
+    """Answer a request the slow way: every branch reasons, then the labels are read.
+
+    Offline only (the thinking teacher in `reflex-distill label --think N`). The response
+    has the same shape as the fast path's, so the labelling code does not care which
+    readout produced it. Tens of seconds per question - never call this from a server.
+    """
+    branches: list[Branch] = []
+    for qid, q in req.questions.items():
+        for fmt in engine.variants:
+            branches.extend(
+                build_branches(qid, q, fmt, req.permutations or engine.default_permutations)
+            )
+    _, sids, _, n_images = engine.state_inputs(req.state)
+    rows = think_logits(engine, [(req.state, b) for b in branches], max_new_tokens, batch_size)
+    per_q: dict[str, list[tuple[Branch, np.ndarray]]] = {}
+    for b, row in zip(branches, rows):
+        per_q.setdefault(b.qid, []).append((b, row))
+    answers = {
+        qid: to_answer(
+            q.type,
+            merge_branches(q.type, per_q[qid], engine.cal, state_tokens=len(sids)),
+            q,
+        )
+        for qid, q in req.questions.items()
+    }
+    q_tokens = sum(len(engine._encode(b.text)) for b in branches)
+    usage = Usage(
+        input_tokens=len(sids) + q_tokens,
+        state_tokens=len(sids),
+        question_tokens=q_tokens,
+        images=n_images,
+    )
+    return SystemOneResponse(model=engine.model_name, answers=answers, usage=usage)

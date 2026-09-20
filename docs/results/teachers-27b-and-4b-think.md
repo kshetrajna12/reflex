@@ -1,5 +1,7 @@
 # Choosing a teacher: Qwen3.8-27B, and the 4B that thinks
 
+> **Historical experiment.** reflex serves one fast forward pass and no reasoning: see [VISION.md](../VISION.md). The results below are kept as evidence, not as a description of the serving path.
+
 Before distilling ([../DISTILLATION.md](../DISTILLATION.md)) the candidate teachers had to
 show they are better judges than the frozen 4B student. Two candidates, three gates.
 
@@ -53,8 +55,8 @@ seems to need either tools or a much larger model.
 * **Teacher for the corpus: the 27B without thinking.** Its labels cost 2 s per state
   (≈ 7 questions × 2 option orders) and carry the long-document and probability skill the
   student lacks most. Hard-tier 0.703 is within 3 points of Jev itself (0.730).
-* **The thinking readout** (`reflex.think`, `--think N` on `reflex-serve`,
-  `reflex-calibrate eval` and `reflex-distill label`) is kept as a second, slower teacher
+* **The thinking readout** (`reflex.think`, `--think N` on `reflex-calibrate eval` and
+  `reflex-distill label`; there is no such flag on `reflex-serve`) is kept as a slower teacher
   for judgement-heavy question families, and as a demonstration that the same 4B holds a
   much better judge inside it than System One exposes. At 20-40 s per item it is not a
   serving mode.

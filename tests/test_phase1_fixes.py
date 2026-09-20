@@ -9,7 +9,7 @@ from reflex.engine import Engine
 from reflex.eval.metrics import fit_temperature
 from reflex.prompt import PromptFormat, build_branches, distinct_orders
 from reflex.readout import Calibration, softmax
-from reflex.schema import ChoiceQuestion, NoulQuestion, SystemOneRequest
+from reflex.schema import ChoiceQuestion, NoulAnswer, NoulQuestion, SystemOneRequest
 
 
 # ---- permutations: distinct orders, balanced binary swaps, per-question seeding
@@ -54,19 +54,15 @@ def test_soft_target_is_not_sharpened_to_its_argmax():
     assert fit_temperature(logits, hard) < 0.7  # the old objective would sharpen
 
 
-# ---- selective reasoning: fast path first, reasoning only on disagreeing questions
+# ---- there is no reasoning path: the readout is one fast forward, always
 class _Fake:
     """Duck-typed Engine for Engine._answer: no model, canned logits per branch."""
 
-    def __init__(self, variants, think_if_disagree, logits_for):
+    def __init__(self, variants):
         self.variants = variants
         self.default_permutations = 1
         self.cal = Calibration()
-        self.think_tokens = 64
-        self.think_if_disagree = think_if_disagree
-        self.escalator = None
         self.model_name = "fake"
-        self.logits_for = logits_for
         self.fast_calls = 0
 
     def _encode(self, text):
@@ -80,42 +76,29 @@ class _Fake:
         return torch.zeros((len(branch_ids), 4))
 
     def restrict(self, row, br):
-        return torch.tensor(self.logits_for(br))
-
-    _escalate = Engine._escalate
+        return torch.tensor([3.0, 0.0] if br.keys[0] is True else [0.0, 3.0])
 
 
-def _run(monkeypatch, think_if_disagree, agree):
-    calls = []
+def test_answer_is_one_fast_forward_and_never_reasons(monkeypatch):
+    def no_thinking(*a, **kw):
+        raise AssertionError("the serving path must not reason")
 
-    def fake_think(engine, items, n):
-        calls.append(len(items))
-        return [np.array([0.0, 3.0]) for _ in items]
-
-    monkeypatch.setattr("reflex.think.think_logits", fake_think)
-    v = [PromptFormat(), PromptFormat.with_texts(PromptFormat(), {"question_heading": "# Q"})]
-
-    def logits_for(br):  # variant 1 agrees or flips depending on `agree`
-        first = br.text.startswith(v[0].branch("")[:0]) and "# Criterion" in br.text
-        return np.array([3.0, 0.0]) if (first or agree) else np.array([0.0, 3.0])
-
-    fake = _Fake(v, think_if_disagree, logits_for)
+    monkeypatch.setattr("reflex.think.think_logits", no_thinking)
+    fmt = PromptFormat()
+    variants = [fmt, PromptFormat.with_texts(fmt, {"question_heading": "# Q"})]
+    fake = _Fake(variants)
     req = SystemOneRequest(state="s", questions={"q": {"type": "noul", "instructions": "?"}})
     resp = Engine._answer(fake, req)
-    return fake, calls, resp
+    assert fake.fast_calls == 1
+    assert 0.0 <= resp.answers["q"].noul <= 1.0
 
 
-def test_agreeing_variants_generate_no_reasoning(monkeypatch):
-    fake, calls, _ = _run(monkeypatch, think_if_disagree=0.15, agree=True)
-    assert fake.fast_calls == 1 and calls == []
+def test_no_reasoning_or_escalation_hooks_on_the_engine():
+    import inspect
 
-
-def test_disagreeing_question_reasons_exactly_once(monkeypatch):
-    fake, calls, resp = _run(monkeypatch, think_if_disagree=0.15, agree=False)
-    assert fake.fast_calls == 1 and len(calls) == 1
-    assert resp.answers["q"].noul < 0.5  # the reasoning answer (B = no) won
-
-
-def test_unconditional_mode_reasons_everything(monkeypatch):
-    fake, calls, _ = _run(monkeypatch, think_if_disagree=None, agree=True)
-    assert fake.fast_calls == 0 and calls == [2]
+    for attr in ("think_tokens", "think_if_disagree", "escalator", "_escalate"):
+        assert not hasattr(Engine, attr)
+    src = inspect.getsource(Engine._answer) + inspect.getsource(Engine.label_logits_batch)
+    assert "think" not in src and "escalat" not in src
+    # and the response shape carries no cascade marker
+    assert "path" not in NoulAnswer.model_fields

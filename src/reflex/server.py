@@ -84,8 +84,7 @@ def create_app(engine, api_key: str | None = None) -> FastAPI:
             resp.usage.question_tokens,
             ms,
         )
-        # exclude_none keeps `path` out of the payload when the server is not cascading,
-        # so an existing client sees the response shape it was written against.
+        # exclude_none: optional fields that are unset stay out of the payload.
         return JSONResponse(
             resp.model_dump(exclude_none=True), headers={"x-reflex-latency-ms": f"{ms:.1f}"}
         )
@@ -130,27 +129,7 @@ def main(argv=None):
         "(the configuration the `stable` git tag recommends); explicit flags still win",
     )
     ap.add_argument(
-        "--think",
-        type=int,
-        default=0,
-        help="System Two readout: reasoning tokens per branch before the logits are read "
-        "(slow; for offline teachers and experiments, not serving)",
-    )
-    ap.add_argument(
         "--ensemble", default=None, help="prompt-ensemble variants json (reflex.ensemble)"
-    )
-    ap.add_argument(
-        "--escalate",
-        default=None,
-        help="escalator.json from reflex-escalate: with --think, the fitted trigger decides "
-        "which questions take the reasoning path (replaces --think-if-disagree)",
-    )
-    ap.add_argument(
-        "--think-if-disagree",
-        type=float,
-        default=None,
-        help="with --ensemble and --think: re-answer with reasoning when the wordings' "
-        "disagreement exceeds this (0-1); the fast path answers the rest",
     )
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8008)
@@ -188,29 +167,11 @@ def main(argv=None):
     engine = Engine.load(
         dtype=getattr(torch, args.dtype),
         max_pack_tokens=args.max_pack_tokens,
-        think_tokens=args.think,
         ensemble=args.ensemble,
         **kw,
     )
     if args.served_name:
         engine.model_name = args.served_name
-    if args.think_if_disagree is not None:
-        # disagreement needs more than one reading per question: wordings, orders, or both
-        if not args.think or not (args.ensemble or (args.permutations or 1) > 1):
-            raise SystemExit("--think-if-disagree needs --think and --ensemble or --permutations>1")
-        engine.think_if_disagree = args.think_if_disagree
-    if args.escalate:
-        if not args.think:
-            raise SystemExit("--escalate needs --think")
-        from reflex.escalate import Escalator
-
-        engine.escalator = Escalator.load(args.escalate)
-        log.info(
-            "escalation trigger %s: threshold %.4f (fitted budget %.0f%%)",
-            args.escalate,
-            engine.escalator.threshold,
-            100 * engine.escalator.budget,
-        )
     uvicorn.run(
         create_app(engine, api_key=args.api_key),
         host=args.host,

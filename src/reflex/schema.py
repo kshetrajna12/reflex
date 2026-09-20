@@ -96,16 +96,9 @@ class SystemOneRequest(BaseModel):
         return self
 
 
-# Which cascade path produced an answer: the fast readout, or the thinking readout after
-# the escalation trigger fired (reflex.escalate). Absent when the server is not cascading,
-# so a client written against the original contract sees exactly what it always saw.
-Path = Literal["fast", "reasoned"]
-
-
 class NoulAnswer(BaseModel):
     type: Literal["noul"] = "noul"
     noul: float
-    path: Path | None = None
 
 
 class ChoiceAnswer(BaseModel):
@@ -113,7 +106,6 @@ class ChoiceAnswer(BaseModel):
     choice: str
     probabilities: dict[str, float]
     confidence: float
-    path: Path | None = None
 
 
 class ScoreAnswer(BaseModel):
@@ -122,7 +114,6 @@ class ScoreAnswer(BaseModel):
     legend: dict[str, str]
     probabilities: dict[str, float]
     confidence: float
-    path: Path | None = None
 
 
 Answer = Annotated[NoulAnswer | ChoiceAnswer | ScoreAnswer, Field(discriminator="type")]

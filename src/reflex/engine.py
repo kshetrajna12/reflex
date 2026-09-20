@@ -206,7 +206,6 @@ class Engine:
         calibration: Calibration | None = None,
         *,
         max_pack_tokens: int = 8192,
-        think_tokens: int = 0,
         max_branch_tokens: int = 4096,
         state_cache_entries: int = 8,
         model_name: str = "reflex-latest",
@@ -222,13 +221,6 @@ class Engine:
         # distributions are averaged; [fmt] alone is the plain single-prompt readout
         self.variants: list[PromptFormat] = [fmt]
         self.last_disagreement: dict[str, float] = {}
-        # System Two on demand: when the ensemble's wordings disagree by more than this,
-        # the question is re-answered with the thinking readout (think_tokens must be > 0)
-        self.think_if_disagree: float | None = None
-        # reflex.escalate.Escalator: a fitted "the fast path is probably wrong here" score.
-        # When set (with think_tokens > 0) it decides escalation instead of the threshold
-        # above, because scatter alone misses the confident-and-wrong reasoning items.
-        self.escalator: Any | None = None
         self.cal = calibration or Calibration()
         self.max_pack_tokens = max_pack_tokens
         self.max_branch_tokens = max_branch_tokens
@@ -240,9 +232,6 @@ class Engine:
             size["longest_edge"] = max_image_pixels
             processor.image_processor.size = size
         self.default_permutations = default_permutations
-        # >0: System Two readout (reflex.think): generate up to this many reasoning tokens
-        # per branch before reading the label logits. Offline teachers only.
-        self.think_tokens = think_tokens
         self.strategy = strategy or ("batched" if self.is_hybrid else "packed")
         if self.strategy not in ("packed", "batched"):
             raise ValueError(f"unknown strategy {self.strategy!r}")
@@ -528,20 +517,6 @@ class Engine:
         with self._lock:
             return self._answer(req)
 
-    def _escalate(self, qid: str, q, state, key_probs: dict, state_tokens: int) -> bool:
-        """Does this question go to the slow path? The fitted trigger when there is one,
-        otherwise the plain disagreement threshold."""
-        dis = self.last_disagreement.get(qid, 0.0)
-        if self.escalator is None:
-            return self.think_if_disagree is not None and dis > self.think_if_disagree
-        from reflex.escalate import question_features
-
-        probs = np.array(list(key_probs.values()), dtype=np.float64)
-        feats = question_features(
-            state, q.type, q.instructions, len(key_probs), state_tokens, probs, dis
-        )
-        return bool(self.escalator.should_escalate(feats))
-
     def _answer(self, req: SystemOneRequest) -> SystemOneResponse:
         branches: list[Branch] = []
         for qid, q in req.questions.items():
@@ -553,18 +528,9 @@ class Engine:
 
         entry, hit = self.encode_state(req.state)
         per_q: dict[str, list[tuple[Branch, np.ndarray]]] = {}
-        selective = self.think_if_disagree is not None or self.escalator is not None
-        if self.think_tokens and not selective:
-            # unconditional System Two: every branch reasons first
-            from reflex.think import think_logits
-
-            rows = think_logits(self, [(req.state, b) for b in branches], self.think_tokens)
-            for b, row in zip(branches, rows):
-                per_q.setdefault(b.qid, []).append((b, row))
-        else:
-            logits = self._forward_branches(entry, branch_ids)  # [B, vocab]
-            for b, row in zip(branches, logits):
-                per_q.setdefault(b.qid, []).append((b, self.restrict(row, b).cpu().numpy()))
+        logits = self._forward_branches(entry, branch_ids)  # [B, vocab]
+        for b, row in zip(branches, logits):
+            per_q.setdefault(b.qid, []).append((b, self.restrict(row, b).cpu().numpy()))
 
         answers = {}
         self.last_disagreement = {}
@@ -575,27 +541,8 @@ class Engine:
                 self.last_disagreement[qid] = disagreement(
                     per_q[qid], self.cal, q.type, len(entry.ids)
                 )
-            results = per_q[qid]
-            key_probs = merge_branches(q.type, results, self.cal, state_tokens=len(entry.ids))
-            path = "fast" if selective else ("reasoned" if self.think_tokens else None)
-            if (
-                selective
-                and self.think_tokens
-                and self._escalate(qid, q, req.state, key_probs, len(entry.ids))
-            ):
-                from reflex.think import think_logits
-
-                # escalate: the default wording's branches, answered after reasoning
-                own = [b for b in branches if b.qid == qid][
-                    : max(1, len(results) // len(self.variants))
-                ]
-                rows = think_logits(self, [(req.state, b) for b in own], self.think_tokens)
-                results = list(zip(own, rows))
-                key_probs = merge_branches(q.type, results, self.cal, state_tokens=len(entry.ids))
-                path = "reasoned"
+            key_probs = merge_branches(q.type, per_q[qid], self.cal, state_tokens=len(entry.ids))
             answers[qid] = to_answer(q.type, key_probs, q)
-            if path is not None:
-                answers[qid].path = path
 
         q_tokens = sum(len(b) for b in branch_ids)
         usage = Usage(
@@ -669,10 +616,6 @@ class Engine:
     @torch.inference_mode()
     def label_logits_batch(self, items: Sequence[tuple[Any, Branch]]) -> list[np.ndarray]:
         """Restricted last-token logits (fp32 numpy) for many independent (state, branch) pairs."""
-        if self.think_tokens:
-            from reflex.think import think_logits
-
-            return think_logits(self, items, self.think_tokens)
         results: list[np.ndarray | None] = [None] * len(items)
         for idx, batch in self.iter_batches(items):
             logits = self.forward_batch(batch).float()

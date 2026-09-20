@@ -71,12 +71,13 @@ def fidelity(probs: np.ndarray, targets: np.ndarray) -> float:
     return float(1.0 - 0.5 * np.abs(probs - targets).sum(1).mean())
 
 
-def evaluate(engine, exs: list[Example], temperature: float = 1.0, logits=None):
+def evaluate(engine, exs: list[Example], temperature: float = 1.0, logits=None, readout=None):
     """Calibration report overall and per source. Returns ({name: text}, logits, labels).
-    Pass `logits` to re-score without a forward pass (e.g. at another temperature)."""
+    Pass `logits` to re-score without a forward pass (e.g. at another temperature).
+    `readout` replaces the fast readout for offline experiments (see `reflex.think`)."""
     if logits is None:
         log.info("evaluating %d examples", len(exs))
-        rows = engine.label_logits_batch([(e.state, e.branch) for e in exs])
+        rows = (readout or engine.label_logits_batch)([(e.state, e.branch) for e in exs])
         K = max(len(r) for r in rows)
         logits = np.full((len(rows), K), -1e9)
         for i, r in enumerate(rows):
@@ -86,7 +87,7 @@ def evaluate(engine, exs: list[Example], temperature: float = 1.0, logits=None):
     return evaluate_probs(exs, probs, logits), logits, labels
 
 
-def evaluate_ensemble(engine, rows: list[dict], permutations: int = 1, seed: int = 0):
+def evaluate_ensemble(engine, rows: list[dict], permutations: int = 1, seed: int = 0, readout=None):
     """Ensemble readout on labelled rows: every question is asked with each of
     `engine.variants` x `permutations`, the distributions are averaged (with the engine's
     calibration), and the merged answer is scored. Returns (examples aligned to the first
@@ -132,7 +133,7 @@ def evaluate_ensemble(engine, rows: list[dict], permutations: int = 1, seed: int
         len(engine.variants),
         permutations,
     )
-    rows_logits = engine.label_logits_batch(flat)
+    rows_logits = (readout or engine.label_logits_batch)(flat)
     K = max(len(g[0].branch.keys) for g in groups)
     probs = np.zeros((len(groups), K))
     dis = np.zeros(len(groups))
@@ -386,14 +387,19 @@ def evaluate_adapter(args):
         max_pack_tokens=args.max_pack_tokens,
         prompt_style=args.prompt_style,
         prompt_texts=args.prompt_texts,
-        think_tokens=args.think,
         ensemble=args.ensemble,
     )
+    readout = None
+    if args.think:
+        # offline experiment only: reflex.think is not a serving mode
+        from reflex.think import think_readout
+
+        readout = think_readout(engine, args.think)
     if args.ensemble or args.permutations > 1:
         from reflex.train.data import read_jsonl
 
         exs, probs, dis, _ = evaluate_ensemble(
-            engine, list(read_jsonl(args.val)), args.permutations
+            engine, list(read_jsonl(args.val)), args.permutations, readout=readout
         )
         fake_logits = np.log(np.clip(probs, 1e-9, 1.0))
         print_reports(
@@ -416,7 +422,7 @@ def evaluate_adapter(args):
             )
         return
     exs = examples(args.val, engine.fmt)
-    reports, logits, labels = evaluate(engine, exs)
+    reports, logits, labels = evaluate(engine, exs, readout=readout)
     print_reports("raw (T=1)", reports)
     kinds, n_opts, st = item_meta(engine, exs)
     probs = np.stack(
@@ -479,7 +485,8 @@ def main(argv=None):
         "--think",
         type=int,
         default=0,
-        help="System Two readout: reasoning tokens per branch (0 = off)",
+        help="OFFLINE EXPERIMENT ONLY (reflex.think), never a serving mode: reasoning "
+        "tokens per branch before the labels are read (0 = off, the fast readout)",
     )
     ev.add_argument(
         "--ensemble", default=None, help="prompt-ensemble variants json (reflex.ensemble)"

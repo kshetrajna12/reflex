@@ -20,7 +20,7 @@ their parameter classes. The shared harness should eventually allow other backbo
 | 2B | [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B) | Broader verified decision supervision, counterfactual examples, and soft probability targets; compare full fine-tuning with LoRA. |
 | 4B | [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) | Improve the readout, then distill reasoning capabilities and test adapters covering the hybrid attention layers. |
 | 9B | [Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B) | Establish the missing baseline and reasoning headroom before choosing an adaptation recipe. |
-| 27B | [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | Optimize a shipping Reflex configuration as well as a teacher: readout, reasoning budgets, and targeted adaptation. |
+| 27B | [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | Optimize a shipping Reflex configuration (direct readout) as well as an offline teacher, where reasoning budgets apply. |
 
 Weight class means parameter count. Record precision and peak memory separately. For a
 future MoE comparison, record both total and active parameters: a
@@ -32,12 +32,14 @@ Maintain two evaluation tracks for every size:
 
 - **Direct readout:** typed probabilities without autoregressive reasoning. Record the
   number of prompt variants and option orders, since those also consume compute.
-- **Additional inference compute:** the best validated quality within explicit reasoning
-  and ensemble budgets, with the same typed output contract.
+- **Additional inference compute (offline only):** the best validated quality within
+  explicit reasoning and ensemble budgets, with the same typed output contract. This track
+  is a headroom measurement and a source of teacher labels. Reasoning never reaches the
+  serving path, which is one fast forward pass ([VISION.md](VISION.md)); the tooling for it
+  (`reflex.think`) is reachable only from `reflex-distill label` and `reflex-calibrate eval`.
 
-Report a quality-versus-compute curve for each track. Larger-model fallbacks belong in a
-separate cascade comparison. Larger models may supply offline training labels without
-changing the student's inference weight class.
+Report a quality-versus-compute curve for each track. Larger models may supply offline
+training labels without changing the student's inference weight class.
 
 **What the existing experiments establish**
 
@@ -75,13 +77,13 @@ configurations:
 
 | Finding | Required change | Acceptance check |
 |---|---|---|
-| Selective reasoning invokes reasoning before checking disagreement. | Run the direct ensemble first when a disagreement threshold is configured; reason only on selected questions. Keep an explicit unconditional reasoning mode. | Agreeing variants generate zero reasoning tokens in selective mode; selected questions take the reasoning path exactly once. |
+| Selective reasoning invokes reasoning before checking disagreement. | Resolved by removal: the serving path has no reasoning mode at all. | No code path from a request reaches `reflex.think`. |
 | Ensemble evaluation omits state length when applying the calibration head. | Share calibration inputs and probability merging between evaluation and serving. | Identical logits, state lengths, and configurations produce matching probabilities in both paths. |
 | Scalar temperature fitting converts soft targets to argmax labels. | Fit scalar temperatures against full target distributions. Retain the head's existing soft-target objective. | A prediction already matching a soft target is not sharpened toward a one-hot target. |
 | Binary `noul` questions are not permuted, and random permutations can duplicate an order. | Add balanced binary swaps and distinct option orders, preserving mappings back to semantic labels. | Order coverage is verified; adding an unrelated question does not change another question's sampled orders. |
 
 Relevant code:
-[engine routing](https://github.com/kshetrajna12/reflex/blob/0109bc3/src/reflex/engine.py#L528),
+[engine readout](../src/reflex/engine.py),
 [ensemble evaluation and fitting](https://github.com/kshetrajna12/reflex/blob/0109bc3/src/reflex/train/calibrate.py),
 [temperature objective](../src/reflex/eval/metrics.py), and
 [branch construction](../src/reflex/prompt.py).
@@ -108,7 +110,7 @@ For every size, evaluate four stages:
 |---|---|---|
 | Frozen baseline | Direct readout with no adapter and temperature 1. | Establish the starting point. |
 | Optimized readout | Cross one/two wordings with one/two distinct option orders. | Measure gains available without weight updates. |
-| Reasoning reference | Compare direct readout with bounded reasoning, initially 256, 768, and 2,048 generated tokens. | Estimate useful headroom and which task families benefit. |
+| Reasoning reference (offline) | Compare direct readout with bounded reasoning, initially 256, 768, and 2,048 generated tokens, through `reflex-calibrate eval --think N`. | Estimate useful headroom and which task families benefit, and pick teachers. Not a serving configuration. |
 | Trained model | Evaluate the selected adaptation recipes against the frozen and optimized baselines. | Measure how much improvement survives training and transfers. |
 
 The reasoning budgets are an initial sweep, not a claim about an optimal budget or a
@@ -182,9 +184,10 @@ measured headroom and failure families for each.
   explicitly measure gains and newly introduced errors.
 - **9B:** let the baseline and reasoning comparison determine whether readout changes,
   distillation, or targeted adapters offer the most promising improvement.
-- **27B:** optimize direct and reasoning readouts as deployable configurations. Test
-  adaptation where independently verified labels expose a correctable weakness; its role
-  as a teacher does not establish that its own decisions are optimal.
+- **27B:** optimize the direct readout as a deployable configuration, and reasoning budgets
+  for its offline teacher role only. Test adaptation where independently verified labels
+  expose a correctable weakness; its role as a teacher does not establish that its own
+  decisions are optimal.
 
 For the hybrid-layer ablation, the current LoRA target list contains `q_proj`, `k_proj`,
 `v_proj`, and `o_proj`. Qwen3.5's linear-attention projections use names including
