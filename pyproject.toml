@@ -36,6 +36,7 @@ reflex-eval-mmlu = "reflex.eval.mmlu:main"
 reflex-calibrate = "reflex.train.calibrate:main"
 reflex-data = "reflex.train.recipes:main"
 reflex-publish-adapter = "reflex.publish:main"
+reflex-distill = "reflex.distill.cli:main"
 reflex-optimize = "reflex.optimize_prompt:main"
 
 [tool.uv]
