@@ -280,11 +280,11 @@ class Engine:
             # transformers' threaded weight loader copies to the device from 4 threads at
             # once, which hangs or segfaults on MPS. Load serially there.
             os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
-            # By default torch lets MPS allocate 1.7x the recommended working set, which is more
-            # than physical RAM on most Macs: an oversized model then swaps the machine into a
-            # watchdog reboot. Cap it so loading fails with an out-of-memory error instead.
-            os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.7")
-            os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.6")
+            # Cap MPS memory so an oversized model raises out-of-memory instead of swapping the
+            # machine to a halt, without fighting a watermark the user already set.
+            from reflex.mps import memory_watermarks
+
+            os.environ.update(memory_watermarks(os.environ))
         tok = AutoTokenizer.from_pretrained(model_id)
         cfg = AutoConfig.from_pretrained(model_id)
         multimodal = getattr(cfg, "vision_config", None) is not None

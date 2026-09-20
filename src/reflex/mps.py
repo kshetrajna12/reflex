@@ -11,11 +11,58 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Mapping
 
 import torch
 import torch.nn.functional as F
 
 log = logging.getLogger("reflex.mps")
+
+HIGH_WATERMARK = "PYTORCH_MPS_HIGH_WATERMARK_RATIO"
+LOW_WATERMARK = "PYTORCH_MPS_LOW_WATERMARK_RATIO"
+DEFAULT_HIGH_WATERMARK = 0.7
+DEFAULT_LOW_WATERMARK = 0.6
+
+
+def memory_watermarks(env: Mapping[str, str]) -> dict[str, str]:
+    """The MPS allocator watermarks to set, given what the user already set in `env`.
+
+    torch lets MPS allocate 1.7x the recommended working set by default, which is more than
+    physical RAM on most Macs: a model that is too large then swaps the machine into a
+    watchdog reboot instead of failing. We default the cap to 0.7 so it raises an
+    out-of-memory error instead.
+
+    The two ratios are only valid as a pair (torch needs 0 <= high <= 2, where 0 means no
+    limit, and low <= high unless high is 0), so each default is chosen around a value the
+    user set rather than independently: a user's low of 1.0 raises our high to 1.0 instead of
+    colliding with 0.7. Returns only the variables that are not already set.
+    """
+
+    def ratio(name: str) -> float | None:
+        if name not in env:
+            return None
+        try:
+            return float(env[name])
+        except ValueError:
+            raise ValueError(f"{name}={env[name]!r} is not a number") from None
+
+    user_high, user_low = ratio(HIGH_WATERMARK), ratio(LOW_WATERMARK)
+    high = user_high if user_high is not None else max(DEFAULT_HIGH_WATERMARK, user_low or 0.0)
+    if user_low is not None:
+        low = user_low
+    else:
+        low = DEFAULT_LOW_WATERMARK if high == 0 else min(DEFAULT_LOW_WATERMARK, high)
+    if not 0 <= high <= 2 or low < 0 or (high != 0 and low > high):
+        raise ValueError(
+            f"invalid MPS memory watermarks: {HIGH_WATERMARK}={high:g}, {LOW_WATERMARK}={low:g}. "
+            "torch needs 0 <= high <= 2 (0 disables the limit) and low <= high."
+        )
+    chosen = {}
+    if user_high is None:
+        chosen[HIGH_WATERMARK] = f"{high:g}"
+    if user_low is None:
+        chosen[LOW_WATERMARK] = f"{low:g}"
+    return chosen
 
 
 def unit_lower_inverse(system: torch.Tensor) -> torch.Tensor:
