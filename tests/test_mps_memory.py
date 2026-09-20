@@ -13,8 +13,18 @@ def test_defaults_when_nothing_is_set():
 
 def test_a_user_low_above_our_high_raises_the_high_default():
     # torch rejects low=1.0 with high=0.7 ("invalid low watermark ratio 1")
-    assert memory_watermarks({LOW_WATERMARK: "1.0"}) == {HIGH_WATERMARK: "1"}
+    assert memory_watermarks({LOW_WATERMARK: "1.0"}) == {HIGH_WATERMARK: "1.0"}
     assert memory_watermarks({LOW_WATERMARK: "0.3"}) == {HIGH_WATERMARK: "0.7"}
+
+
+def test_a_derived_default_keeps_the_users_precision():
+    # ":g" rounded 0.7000001 to "0.7", which torch then rejects as lower than the low ratio
+    for value in ("0.7000001", "1.2345678901"):
+        chosen = memory_watermarks({LOW_WATERMARK: value})
+        assert float(chosen[HIGH_WATERMARK]) >= float(value)
+        assert memory_watermarks({LOW_WATERMARK: value, **chosen}) == {}  # still a valid pair
+    chosen = memory_watermarks({HIGH_WATERMARK: "0.5999999"})
+    assert float(chosen[LOW_WATERMARK]) <= 0.5999999
 
 
 def test_a_user_high_below_our_low_lowers_the_low_default():

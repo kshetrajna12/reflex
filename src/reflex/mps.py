@@ -57,11 +57,13 @@ def memory_watermarks(env: Mapping[str, str]) -> dict[str, str]:
             f"invalid MPS memory watermarks: {HIGH_WATERMARK}={high:g}, {LOW_WATERMARK}={low:g}. "
             "torch needs 0 <= high <= 2 (0 disables the limit) and low <= high."
         )
+    # repr, not ":g": a default derived from the user's value has to survive the round trip
+    # exactly, or 0.7000001 is written back as 0.7 and the pair is no longer valid.
     chosen = {}
     if user_high is None:
-        chosen[HIGH_WATERMARK] = f"{high:g}"
+        chosen[HIGH_WATERMARK] = repr(high)
     if user_low is None:
-        chosen[LOW_WATERMARK] = f"{low:g}"
+        chosen[LOW_WATERMARK] = repr(low)
     return chosen
 
 
