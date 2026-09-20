@@ -299,7 +299,7 @@ def _llm_questions(call, state, n: int) -> dict:
     return validate(state, qs)
 
 
-def gateway_chat(base_url: str, key: str, model: str, max_tokens: int = 1500):
+def gateway_chat(base_url: str, key: str, model: str, max_tokens: int = 900):
     import httpx
 
     def call(prompt: str) -> str:
