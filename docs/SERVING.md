@@ -69,4 +69,8 @@ manifest, then:
 
     git tag -f stable && git push -f origin stable
 
-The current `stable` is the frozen model with the default prompt and no calibration file.
+The current `stable` is the frozen model with the default prompt, no calibration file, and
+`permutations: 2`: every choice or score question is asked in two distinct option orders (yes/no
+questions in both orders) and the two distributions are averaged. Same forward pass, about
+1.1x the latency, hard-tier accuracy 0.658 -> 0.685 and calibration error 0.086 -> 0.081 on the
+public benchmark items, pooled external-set calibration error 0.055 -> 0.032.
