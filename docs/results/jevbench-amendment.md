@@ -1,4 +1,4 @@
-# Draft comment for fstandhartinger/jevbench issue #3 (NOT POSTED; for review)
+# Amendment posted on fstandhartinger/jevbench issue #3 (2026-09-19)
 
 Update to this request: please evaluate the **frozen base model with reflex's default
 prompt and no adapter** instead of the LoRA adapter named above. Our controls since
