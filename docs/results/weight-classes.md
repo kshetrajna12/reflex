@@ -44,14 +44,29 @@ What the table says:
 | 2B | 2 | 1.000 | 0.639 | 0.468 | 0.146 | 0.705 | 70.6 | 0.09 s |
 | 4B (stable) | 1 | 1.000 | 0.917 | 0.658 | 0.086 | 0.708 | 76.8 | 0.18 s |
 | 4B (stable) | 2 | 1.000 | 0.917 | 0.685 | 0.081 | 0.740 | 78.9 | 0.19 s |
-| 9B | 1 | *(pending)* | | | | | | |
-| 9B | 2 | *(pending)* | | | | | | |
+| 9B | 1 | 1.000 | 0.889 | 0.658 | 0.120 | 0.689 | 72.5 | 0.30 s |
+| 9B | 2 | 1.000 | 0.931 | 0.694 | 0.136 | 0.716 | 72.2 | 0.32 s |
 | 27B | 1 | 1.000 | 0.917 | 0.703 | 0.088 | 0.831 | 82.7 | 0.88 s |
 | 27B | 2 | 1.000 | 0.958 | 0.766 | 0.061 | 0.827 | 85.2 | 0.96 s |
 | Jev (official) | | 1.000 | 0.986 | 0.730 | 0.031 | | | |
 
-The hard tier separates the classes cleanly: 0.34, 0.41, 0.66, 0.70 by size at one order.
+The hard tier separates the classes: 0.34, 0.41, 0.66, 0.66, 0.70 by size at one order, and
+0.38, 0.47, 0.69, 0.69, 0.77 at two. The 9B is the surprise: it matches the 4B on hard-tier
+accuracy at twice the latency and is *worse* calibrated (hard ECE 0.136 vs 0.081; it is
+over-confident on Yelp and on the probability family, 0.40 vs 0.60). Between 4B and 27B the
+step that pays is the 27B, and the plan's "establish the 9B before choosing a recipe" question
+is answered: as a frozen judge it is not the middle ground it looked like on paper.
 Two orders lift every class, and lift calibration most where it was worst (the 0.8B's
 calibration axis goes from 42 to 66 without a single correct answer added on the standard
 tier). Latency scales with weight size as expected: the 2B answers a hard item in 90 ms, the
 27B in about a second.
+
+## What follows for the plan
+
+* Direct-readout track, frozen: the 4B at two orders is the serving default (`stable`), the
+  27B at two orders is the quality configuration (filed as `reflex-27b`). The 9B adds cost
+  without quality; the 0.8B and 2B need training before they are decision models at all.
+* The remaining calibration gap to Jev is on the 27B (0.061 vs 0.031) and the 4B (0.081).
+  Nothing fitted has transferred so far; the next things to try are readout-side (a
+  letters-only wording pair on the 27B) and, for the small classes, the training pilots in
+  Phase 4, where the frozen baseline is low enough that a curriculum has room to help.
