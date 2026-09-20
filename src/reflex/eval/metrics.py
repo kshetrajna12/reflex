@@ -67,16 +67,25 @@ def report(probs: np.ndarray, labels: np.ndarray, n_bins: int = 15) -> Calibrati
     )
 
 
-def fit_temperature(logits: np.ndarray, labels: np.ndarray) -> float:
-    """1-D temperature scaling by NLL minimisation (golden-section on log T)."""
+def fit_temperature(logits: np.ndarray, targets: np.ndarray) -> float:
+    """1-D temperature scaling by (soft) NLL minimisation, golden-section on log T.
+
+    `targets` is either an int label per row or a full distribution per row ([N, K],
+    padded with zeros). A soft target is honoured as a distribution: a prediction that
+    already matches it is not sharpened toward its argmax."""
     logits = np.asarray(logits, dtype=np.float64)
-    labels = np.asarray(labels)
+    targets = np.asarray(targets)
+    if targets.ndim == 1:
+        onehot = np.zeros_like(logits)
+        onehot[np.arange(len(targets)), targets.astype(int)] = 1.0
+        targets = onehot
+    targets = targets[:, : logits.shape[1]]
 
     def nll(logT):
         z = logits / np.exp(logT)
         z = z - z.max(1, keepdims=True)
         logp = z - np.log(np.exp(z).sum(1, keepdims=True))
-        return -logp[np.arange(len(labels)), labels].mean()
+        return -(targets * logp).sum(1).mean()
 
     lo, hi = np.log(0.05), np.log(20.0)
     gr = (np.sqrt(5) - 1) / 2

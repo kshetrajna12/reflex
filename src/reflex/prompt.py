@@ -166,31 +166,62 @@ def _compact_body(instructions: Text, labelled: list[tuple[str, str]]) -> str:
     return json.dumps(payload, ensure_ascii=False)[1:]  # drop "{": the prefix opened it
 
 
+def distinct_orders(keys: list[Any], permutations: int, rng: random.Random) -> list[list[Any]]:
+    """The identity order first, then up to `permutations - 1` *distinct* shuffles. With two
+    options the second order is always the swap, so binary questions get balanced coverage."""
+    orders = [list(keys)]
+    seen = {tuple(keys)}
+    import math
+
+    limit = min(permutations, math.factorial(len(keys))) if len(keys) <= 8 else permutations
+    tries = 0
+    while len(orders) < limit and tries < 50 * limit:
+        tries += 1
+        o = list(keys)
+        rng.shuffle(o)
+        if tuple(o) not in seen:
+            seen.add(tuple(o))
+            orders.append(o)
+    return orders
+
+
 def build_branches(
     qid: str,
     q: NoulQuestion | ChoiceQuestion | ScoreQuestion,
     fmt: PromptFormat,
     permutations: int = 1,
     rng: random.Random | None = None,
+    seed: int = 0,
 ) -> list[Branch]:
-    """Build 1..permutations branches for a question. Noul is never permuted."""
-    rng = rng or random.Random(0)
+    """Build 1..permutations branches for a question, each with a distinct option order.
+    Orders are drawn from a generator seeded by (seed, qid), so one question's orders do
+    not depend on which other questions are in the request. Yes/no questions get the
+    swapped order as their second branch."""
+    rng = rng or random.Random(f"{seed}:{qid}")
     if fmt.style == "compact":
         return _build_compact(qid, q, fmt, permutations, rng)
 
     if isinstance(q, NoulQuestion):
         t = render_text(q.criteria.true) if q.criteria else ""
         f = render_text(q.criteria.false) if q.criteria else ""
-        if fmt.t("noul_readout") == "letters":
-            labelled = [
-                ("A", "yes: " + (t or fmt.t("noul_true_default"))),
-                ("B", "no: " + (f or fmt.t("noul_false_default"))),
-            ]
-            body = _options_block(q.instructions, labelled, fmt.t("choice_ask"), fmt)
-            return [Branch(qid, "noul", fmt.branch(body), ["A", "B"], [True, False])]
-        labelled = [(YES, t or fmt.t("noul_true_default")), (NO, f or fmt.t("noul_false_default"))]
-        body = _options_block(q.instructions, labelled, fmt.t("noul_ask"), fmt)
-        return [Branch(qid, "noul", fmt.branch(body), [YES, NO], [True, False])]
+        yes_text, no_text = (t or fmt.t("noul_true_default")), (f or fmt.t("noul_false_default"))
+        out: list[Branch] = []
+        for swapped in [False, True] if permutations > 1 else [False]:
+            keys = [False, True] if swapped else [True, False]
+            if fmt.t("noul_readout") == "letters":
+                pair = [("A", "yes: " + yes_text), ("B", "no: " + no_text)]
+                if swapped:
+                    pair = [("A", "no: " + no_text), ("B", "yes: " + yes_text)]
+                body = _options_block(q.instructions, pair, fmt.t("choice_ask"), fmt)
+                out.append(Branch(qid, "noul", fmt.branch(body), ["A", "B"], keys))
+            else:
+                pair = [(YES, yes_text), (NO, no_text)]
+                labels = [YES, NO]
+                if swapped:
+                    pair, labels = [(NO, no_text), (YES, yes_text)], [NO, YES]
+                body = _options_block(q.instructions, pair, fmt.t("noul_ask"), fmt)
+                out.append(Branch(qid, "noul", fmt.branch(body), labels, keys))
+        return out
 
     if isinstance(q, ChoiceQuestion):
         keys = list(q.criteria.keys())
@@ -214,10 +245,7 @@ def build_branches(
             return f"{head} {render_text(q.criteria[k])}"
 
     out: list[Branch] = []
-    for p in range(permutations):
-        order = list(keys)
-        if p > 0:
-            rng.shuffle(order)
+    for order in distinct_orders(keys, permutations, rng):
         labels = [LETTERS[i] for i in range(len(order))]
         labelled = [(lab, desc_of(k)) for lab, k in zip(labels, order)]
         body = _options_block(q.instructions, labelled, ask, fmt)

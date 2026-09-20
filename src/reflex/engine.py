@@ -29,7 +29,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import logging
-import random
 import threading
 import time
 from collections import OrderedDict
@@ -526,18 +525,18 @@ class Engine:
             return self._answer(req)
 
     def _answer(self, req: SystemOneRequest) -> SystemOneResponse:
-        rng = random.Random(0)
         branches: list[Branch] = []
         for qid, q in req.questions.items():
             for fmt in self.variants:
                 branches.extend(
-                    build_branches(qid, q, fmt, req.permutations or self.default_permutations, rng)
+                    build_branches(qid, q, fmt, req.permutations or self.default_permutations)
                 )
         branch_ids = [self._encode(b.text) for b in branches]
 
         entry, hit = self.encode_state(req.state)
         per_q: dict[str, list[tuple[Branch, np.ndarray]]] = {}
-        if self.think_tokens:
+        if self.think_tokens and self.think_if_disagree is None:
+            # unconditional System Two: every branch reasons first
             from reflex.think import think_logits
 
             rows = think_logits(self, [(req.state, b) for b in branches], self.think_tokens)

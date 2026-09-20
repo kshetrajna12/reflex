@@ -91,24 +91,22 @@ def evaluate_ensemble(engine, rows: list[dict], permutations: int = 1, seed: int
     `engine.variants` x `permutations`, the distributions are averaged (with the engine's
     calibration), and the merged answer is scored. Returns (examples aligned to the first
     branch of each question, probs, disagreement per question)."""
-    import random
-
     from reflex.ensemble import disagreement, merged_probs_for_keys
     from reflex.prompt import build_branches
     from reflex.schema import SystemOneRequest
     from reflex.train.data import target_vector
 
-    rng = random.Random(seed)
     groups = []
     flat = []
-    for row in rows:
+    for ri, row in enumerate(rows):
         req = SystemOneRequest(state=row["state"], questions=row["questions"])
+        _, sids, _, _ = engine.state_inputs(req.state)
         for qid, q in req.questions.items():
             if qid not in row.get("labels", {}):
                 continue
             brs = []
             for fmt in engine.variants:
-                brs.extend(build_branches(qid, q, fmt, permutations, rng))
+                brs.extend(build_branches(qid, q, fmt, permutations, seed=seed * 100003 + ri))
             first = brs[0]
             ex = Example(
                 req.state,
@@ -118,7 +116,7 @@ def evaluate_ensemble(engine, rows: list[dict], permutations: int = 1, seed: int
             )
             idx = list(range(len(flat), len(flat) + len(brs)))
             flat.extend((req.state, b) for b in brs)
-            groups.append((ex, idx, q.type, brs))
+            groups.append((ex, idx, q.type, brs, len(sids)))
     log.info(
         "ensemble eval: %d questions, %d branches (%d variants x %d permutations)",
         len(groups),
@@ -131,11 +129,11 @@ def evaluate_ensemble(engine, rows: list[dict], permutations: int = 1, seed: int
     probs = np.zeros((len(groups), K))
     dis = np.zeros(len(groups))
     exs = []
-    for gi, (ex, idx, kind, brs) in enumerate(groups):
+    for gi, (ex, idx, kind, brs, n_state) in enumerate(groups):
         results = [(brs[j], rows_logits[i]) for j, i in enumerate(idx)]
-        p = merged_probs_for_keys(kind, results, engine.cal, ex.branch.keys)
+        p = merged_probs_for_keys(kind, results, engine.cal, ex.branch.keys, n_state)
         probs[gi, : len(p)] = p
-        dis[gi] = disagreement(results, engine.cal, kind)
+        dis[gi] = disagreement(results, engine.cal, kind, n_state)
         exs.append(ex)
     return exs, probs, dis
 
@@ -328,10 +326,13 @@ def fit_calibration(engine, exs: list[Example], logits: np.ndarray, labels: np.n
     from reflex.calibration_head import fit as fit_head
 
     kinds, n_opts, st = item_meta(engine, exs)
+    targets = np.zeros_like(logits)
+    for i, e in enumerate(exs):
+        targets[i, : len(e.target)] = e.target
     temps = {}
     for kind in ("noul", "choice", "score"):
         m = kinds == kind
-        temps[kind] = fit_temperature(logits[m], labels[m]) if m.sum() >= 20 else 1.0
+        temps[kind] = fit_temperature(logits[m], targets[m]) if m.sum() >= 20 else 1.0
     probs_t = np.stack([softmax(r, temps[k]) for r, k in zip(logits, kinds, strict=True)])
     print_reports(
         "per-primitive temperature " + ", ".join(f"{k}={v:.2f}" for k, v in temps.items()),
