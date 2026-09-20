@@ -230,9 +230,10 @@ model on your GPU. Expect a rougher ordering than the 4B; it is the same questio
 
 On the public items of [JevBench](https://github.com/fstandhartinger/jevbench), a
 benchmark for Jev-class decision models, the **frozen** Qwen3.5-4B with reflex's default
-prompt scores 1.000 / 0.917 / 0.658 on the easy / standard / hard tiers, against
+prompt, reading each question in two option orders, scores 1.000 / 0.917 / 0.685 on the
+easy / standard / hard tiers, against
 1.000 / 0.986 / 0.730 for Jev itself and 1.000 / 0.986 / 0.613 for the strongest other
-open 4B rebuild, on the same items, with hard-tier calibration error 0.086 and no
+open 4B rebuild, on the same items, with hard-tier calibration error 0.081 and no
 calibration file. That is our own run; an official run has been requested.
 
 Fine-tuning turned out to be a trap for general use: the adapters trained here improved

@@ -5,12 +5,23 @@
   "calibration": null,
   "prompt_style": "markdown",
   "prompt_texts": null,
-  "permutations": 1,
-  "released": "2026-09-19",
+  "permutations": 2,
+  "released": "2026-09-20",
   "selected_on": {
-    "external_sets_acc": {"bitext_support": 0.907, "mnli_mismatched": 0.840, "toxic_chat": 0.843, "yelp_stars": 0.640},
-    "jevbench_public_acc": {"easy": 1.000, "standard": 0.917, "hard": 0.658},
-    "jevbench_public_hard_ece": 0.086,
-    "notes": "frozen base model; docs/results/frozen-vs-trained.md explains why no adapter and no calibration file"
+    "external_sets_acc": {
+      "bitext_support": 0.917,
+      "mnli_mismatched": 0.837,
+      "toxic_chat": 0.833,
+      "yelp_stars": 0.653
+    },
+    "external_sets_pooled_ece": 0.032,
+    "jevbench_public_acc": {
+      "easy": 1.0,
+      "standard": 0.917,
+      "hard": 0.685
+    },
+    "jevbench_public_hard_ece": 0.081,
+    "jevbench_public_calibration_axis": 78.9,
+    "notes": "frozen base model, default prompt, two distinct option orders per question averaged (docs/results/order-averaging.md); single-order figures were hard 0.658 / ECE 0.086"
   }
 }
