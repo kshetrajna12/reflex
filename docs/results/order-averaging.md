@@ -83,7 +83,22 @@ That is what `--think-if-disagree` keys on: the fast path answers everything, an
 questions whose readings scatter are re-answered with the thinking readout. Its public-item
 result is recorded below when available.
 
+## Selective reasoning on the 4B (letters-only ensemble × two orders, think 768 tokens when disagreement > 0.15)
+
+| public items | 2 orders | + selective reasoning |
+|---|---|---|
+| standard | 0.917 | **0.958** (69/72) |
+| hard | 0.685 | 0.658 |
+| hard ECE | 0.081 | 0.082 |
+| calibration axis | 78.9 | 79.1 |
+| p50 / p95 latency, hard items | 0.19 s / 0.8 s | 0.25 s / 42 s |
+
+34 escalations across the 231 items, none on the easy tier. Reasoning fixes the standard-tier
+adequacy and policy misses (the same ones the always-think run fixes) but on the hard tier it
+trades items: multi-hop drops to 0.50 while tradeoff rises to 0.83. The disagreement gate works
+as a gate; what it routes to is not yet a better judge on hard items, and the p95 makes it a
+batch-mode option only.
+
 ## Pending rows
 
 * 27B, two orders, external sets.
-* 4B, letters-only ensemble × two orders, thinking when disagreement > 0.15.
