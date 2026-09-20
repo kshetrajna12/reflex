@@ -286,7 +286,7 @@ def clean(q: dict) -> dict:
     return item
 
 
-def _llm_questions(call, state, n: int) -> dict:
+def _llm_questions(call, state, n: int, tag: str = "llm") -> dict:
     text = call(GEN_PROMPT.format(n=n, state=json.dumps(state, ensure_ascii=False)[:9000]))
     arr = _extract_json_array(text) or []
     qs = {}
@@ -294,7 +294,7 @@ def _llm_questions(call, state, n: int) -> dict:
         if not isinstance(q, dict):
             continue
         qid = re.sub(r"[^a-z0-9_]", "_", str(q.get("id") or f"q{i}").lower())[:40] or f"q{i}"
-        qid = f"llm_{qid}"
+        qid = f"{tag}_{qid}"
         qs[qid] = clean(q)
     return validate(state, qs)
 
@@ -334,6 +334,8 @@ def attach(
     workers: int = 8,
     bank_max: int = 3,
     seed: int = 0,
+    tag: str = "llm",
+    bank: bool = True,
 ):
     """Bank questions (domain + general, sampled so no state carries all of them) plus
     `per_state` LLM-written ones. Returns rows with a `questions` dict."""
@@ -347,9 +349,9 @@ def attach(
         keys = list(pool)
         rng2 = random.Random(f"{seed}:{row['id']}")
         chosen = rng2.sample(keys, min(bank_max, len(keys)))
-        qs = validate(row["state"], {k: pool[k] for k in chosen})
+        qs = validate(row["state"], {k: pool[k] for k in chosen}) if bank else {}
         if call is not None and per_state > 0:
-            qs.update(_llm_questions(call, row["state"], per_state))
+            qs.update(_llm_questions(call, row["state"], per_state, tag))
         return {**row, "questions": qs}
 
     rng.shuffle(rows)

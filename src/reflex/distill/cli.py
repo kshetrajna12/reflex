@@ -25,13 +25,15 @@ def cmd_questions(a):
     from reflex.distill.questions import attach, gateway_chat
 
     rows = list(read_jsonl(a.inp))
+    if a.subset < 1.0:  # a random slice, e.g. for a slower, better question writer
+        rows = [r for r in rows if _split(r["id"], a.seed + 7) < a.subset]
     call = None
     if a.per_state > 0:
         key = os.environ.get(a.key_env, "")
         if not key:
             raise SystemExit(f"set {a.key_env} for the question-writing model")
         call = gateway_chat(a.gateway, key, a.model)
-    out = list(attach(rows, call, a.per_state, a.workers, a.bank_max, a.seed))
+    out = list(attach(rows, call, a.per_state, a.workers, a.bank_max, a.seed, a.tag, not a.no_bank))
     # the anchor slice is labelled by the frozen student, on states the teacher never
     # labels, so it can only pull toward the base model, never toward the teacher
     teach = [r for r in out if _split(r["id"], a.seed + 1) >= a.anchor_frac]
@@ -121,6 +123,31 @@ def cmd_mix(a):
     )
 
 
+def cmd_merge(a):
+    """Union of questions (and labels, if present) for rows with the same id, across files
+    written by different question writers or labelling passes."""
+    merged: dict[str, dict] = {}
+    for path in a.inputs:
+        for r in read_jsonl(path):
+            m = merged.setdefault(r["id"], {**r, "questions": {}, "labels": {}, "confidence": {}})
+            m["questions"].update(r.get("questions", {}))
+            m["labels"].update(r.get("labels", {}))
+            m["confidence"].update(r.get("confidence", {}))
+    rows = [r for r in merged.values() if r["questions"]]
+    for r in rows:
+        if not r["labels"]:
+            r.pop("labels")
+            r.pop("confidence")
+    n = write_jsonl(rows, a.out)
+    log.info(
+        "merged %d files -> %d rows, %d questions -> %s",
+        len(a.inputs),
+        n,
+        sum(len(r["questions"]) for r in rows),
+        a.out,
+    )
+
+
 def main(argv=None):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     ap = argparse.ArgumentParser(prog="reflex-distill")
@@ -145,6 +172,11 @@ def main(argv=None):
     q.add_argument("--bank-max", type=int, default=3)
     q.add_argument("--workers", type=int, default=8)
     q.add_argument("--seed", type=int, default=0)
+    q.add_argument("--subset", type=float, default=1.0, help="only this random share of the states")
+    q.add_argument(
+        "--tag", default="llm", help="prefix for LLM-written question ids (one per writer model)"
+    )
+    q.add_argument("--no-bank", action="store_true", help="LLM-written questions only")
     q.add_argument(
         "--anchor-frac",
         type=float,
@@ -170,6 +202,11 @@ def main(argv=None):
     lab.add_argument("--resume", action="store_true")
     lab.add_argument("--log-every", type=int, default=100)
     lab.set_defaults(fn=cmd_label)
+
+    mg = sub.add_parser("merge", help="union questions/labels per state id across files")
+    mg.add_argument("inputs", nargs="+")
+    mg.add_argument("--out", required=True)
+    mg.set_defaults(fn=cmd_merge)
 
     m = sub.add_parser("mix", help="teacher + anchor rows -> train/eval files")
     m.add_argument("--teacher", required=True)
