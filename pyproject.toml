@@ -38,7 +38,6 @@ reflex-data = "reflex.train.recipes:main"
 reflex-publish-adapter = "reflex.publish:main"
 reflex-distill = "reflex.distill.cli:main"
 reflex-optimize = "reflex.optimize_prompt:main"
-reflex-escalate = "reflex.escalate:main"
 
 [tool.uv]
 index-strategy = "unsafe-best-match"

@@ -1,11 +1,13 @@
 # The escalation trigger: a better gate onto a slow path that is not yet better
 
-Step 2 of [VISION.md](../VISION.md). A small classifier decides which questions the fast
-path should not be trusted on, and sends only those to the thinking readout. It is fitted
-on our own labelled sets, never on a benchmark item, and it is budgeted.
+> **Historical experiment.** reflex serves one fast forward pass and no reasoning: see [VISION.md](../VISION.md). The results below are kept as evidence, not as a description of the serving path.
+
+A small classifier decides which questions the fast path should not be trusted on, and
+sends only those to the thinking readout. It is fitted on our own labelled sets, never on
+a benchmark item, and it is budgeted.
 
 The short version: the trigger is a clearly better gate than cross-order disagreement, on
-every split we measured, and it picks out exactly the reasoning-shaped families VISION
+every split we measured, and it picks out exactly the reasoning-shaped families we
 predicted. On the public items it does not buy hard-tier accuracy, because reasoning
 itself helps on temporal/numeric items and actively hurts on long-policy ones. Best
 hard-tier calibration we have recorded on the 4B; accuracy unchanged.

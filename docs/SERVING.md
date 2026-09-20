@@ -13,6 +13,7 @@ configuration on a rented GPU.
 | reflex commit | `dae6799` |
 | endpoint | `POST /v1/systemone`, TypeSafe-compatible; `model` may be omitted |
 | GPU | any CUDA GPU with ≥ 16 GB (RTX PRO 4500 32 GB, A40, L4 all fine); ~9 GB weights |
+| readout | the fast single pass, always; the server has no reasoning or escalation mode, so p95 is a small multiple of p50 |
 
 ## One command, two ways
 

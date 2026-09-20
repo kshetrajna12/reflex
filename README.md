@@ -250,8 +250,11 @@ then run as a separate branch that can see the state but not the other questions
 the same forward pass. Instead of letting the model write an answer, we look at what it
 *would* say next, keep only the answer labels (A/B/C or Yes/No), and turn those scores
 into percentages. A single "temperature" number, fitted on labelled data, makes the
-percentages honest. The details, the design trade-offs, and the mapping to the Jev
-write-ups are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+percentages honest. There is no decoding loop and no reasoning anywhere on that path:
+one request is one forward pass, which is what keeps it under 300 ms. The details, the
+design trade-offs, and the mapping to the Jev write-ups are in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); why the fast pass is the whole product is
+in [docs/VISION.md](docs/VISION.md).
 
 ## Good to know
 
@@ -263,6 +266,9 @@ write-ups are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - A `choice` question can have up to 26 options; `score` can have 2 to 10 levels.
 - The model is not magic: check its answers on a handful of your own examples before
   trusting it, and use the confidence numbers to route uncertain cases to a person.
+- `reflex.think` lets a model reason before the labels are read. It is an offline tool
+  for teacher labelling and experiments only, never a serving mode; the server has no
+  flag for it.
 - Tests: `uv sync --extra dev && uv run pytest` (the GPU tests download small models).
 
 ## Credits

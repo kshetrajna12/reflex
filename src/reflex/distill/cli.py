@@ -65,8 +65,16 @@ def cmd_label(a):
         max_pack_tokens=a.max_pack_tokens,
         prompt_style=a.prompt_style,
         prompt_texts=a.prompt_texts,
-        think_tokens=a.think,
     )
+    answer = None
+    if a.think:
+        # a thinking teacher, offline: reflex.think is not a serving mode
+        from functools import partial
+
+        from reflex.think import think_answer
+
+        answer = partial(think_answer, engine, max_new_tokens=a.think)
+
     rows = list(read_jsonl(a.inp))
     if a.limit:
         rows = rows[: a.limit]
@@ -78,7 +86,7 @@ def cmd_label(a):
     mode = "a" if done else "w"
     n = 0
     with open(a.out, mode) as f:
-        for r in label_rows(engine, rows, a.permutations, a.log_every):
+        for r in label_rows(engine, rows, a.permutations, a.log_every, answer=answer):
             import json
 
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
@@ -200,7 +208,11 @@ def main(argv=None):
     lab.add_argument("--prompt-style", default="markdown")
     lab.add_argument("--prompt-texts", default=None)
     lab.add_argument(
-        "--think", type=int, default=0, help="System Two teacher: reasoning tokens per branch"
+        "--think",
+        type=int,
+        default=0,
+        help="OFFLINE TEACHER ONLY (reflex.think), never a serving mode: reasoning tokens "
+        "per branch before the labels are read (0 = off, the fast readout)",
     )
     lab.add_argument("--limit", type=int, default=0)
     lab.add_argument("--resume", action="store_true")

@@ -17,14 +17,16 @@ from reflex.schema import SystemOneRequest
 log = logging.getLogger("reflex.distill")
 
 
-def label_rows(engine, rows, permutations: int = 2, log_every: int = 100):
+def label_rows(engine, rows, permutations: int = 2, log_every: int = 100, answer=None):
+    """`answer` replaces `engine.answer` for an offline thinking teacher (reflex.think)."""
+    answer = answer or engine.answer
     t0 = time.time()
     for i, row in enumerate(rows):
         req = SystemOneRequest(
             state=row["state"], questions=row["questions"], permutations=permutations
         )
         try:
-            resp = engine.answer(req)
+            resp = answer(req)
         except Exception as e:  # noqa: BLE001 - one bad row must not kill a long run
             log.warning("row %s failed: %s", row.get("id"), str(e)[:200])
             continue
