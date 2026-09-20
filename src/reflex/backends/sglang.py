@@ -27,9 +27,9 @@ answer. A label log-probability is the label logit minus a constant that is shar
 every label at that position, so softmax — with or without a temperature — gives exactly
 the distribution the transformers engine computes from raw logits.
 
-Out of scope for this backend: images in the state, the thinking readout and the
-prompt ensembles across wordings. Those need hidden states or a decoding loop that this protocol does
-not expose; they raise `NotImplementedError`.
+Out of scope for this backend: images in the state, and anything that needs the weights
+in this process (a LoRA adapter, a prompt ensemble across wordings). SGLang owns the GPU
+and reflex holds no weights, so those are refused rather than quietly ignored.
 """
 
 from __future__ import annotations

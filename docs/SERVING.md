@@ -108,10 +108,11 @@ structural rather than a mask. The recipe follows
 [ekzhang/openjev-sglang](https://github.com/ekzhang/openjev-sglang);
 `docs/results/sglang-backend.md` has the equivalence, latency and accuracy numbers.
 
-**What the SGLang backend does not do.** Images in the state, the thinking readout
-(`--think`), the escalation cascade (`--escalate`) and LoRA adapters (`--adapter`) all
-need the weights in reflex's own process; the flags are rejected rather than ignored.
-Serve the default transformers backend for those.
+**What the SGLang backend does not do.** Images in the state, LoRA adapters
+(`--adapter`), prompt ensembles (`--ensemble`) and `--device` all need the weights in
+reflex's own process; the flags are rejected rather than ignored. Serve the default
+transformers backend for those. The device SGLang runs on is set when you launch its
+server, not here.
 
 ### Which backend, and at what size
 

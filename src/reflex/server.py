@@ -112,8 +112,8 @@ def _sglang_backend(args):
     """`--backend sglang`: the same prompt and readout, computed by an SGLang server.
 
     Only the flags that survive the move are honoured. Anything that needs the weights in
-    this process (an adapter, prompt ensembles) is rejected here rather than quietly
-    ignored.
+    this process (an adapter, prompt ensembles, a local device) is rejected here rather
+    than quietly ignored.
     """
     from transformers import AutoTokenizer
 
@@ -122,12 +122,14 @@ def _sglang_backend(args):
     from reflex.prompt import PromptFormat
     from reflex.readout import Calibration
 
-    for flag, value in (
-        ("--adapter", args.adapter),
-        ("--ensemble", args.ensemble),
-    ):
+    for flag, value in (("--adapter", args.adapter), ("--ensemble", args.ensemble)):
         if value:
             raise SystemExit(f"{flag} is not supported by --backend sglang")
+    if args.device != "cuda":
+        raise SystemExit(
+            "--device applies to the in-process model; --backend sglang holds no weights "
+            "(the device is SGLang's, set when you launch its server)"
+        )
 
     tok = AutoTokenizer.from_pretrained(args.model)
     template = tok.chat_template or ""

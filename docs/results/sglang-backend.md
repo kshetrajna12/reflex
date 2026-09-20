@@ -198,9 +198,8 @@ more questions per state, and many concurrent clients.
 > NVFP4 checkpoint beats it on every axis. The 2.2x slowdown is a fact about 4B models,
 > not about the backend.
 
-Open work this spike did not do: images in the state, the thinking readout and the
-escalation cascade all need the weights in reflex's own process and raise
-`NotImplementedError`; the per-branch fan-out could become a single SGLang batch request
+Open work this spike did not do: images in the state need the vision encoder in reflex's
+own process and raise `NotImplementedError`, as do LoRA adapters; the per-branch fan-out could become a single SGLang batch request
 if the server grows one; and nobody has checked whether SGLang's non-batch-invariance
 would blur a fitted temperature at the third decimal.
 
