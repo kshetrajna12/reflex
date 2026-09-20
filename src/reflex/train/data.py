@@ -24,7 +24,6 @@ branch's option keys. Training and serving share one code path.
 from __future__ import annotations
 
 import json
-import random
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -88,14 +87,14 @@ def examples(path: str, fmt: PromptFormat, permutations: int = 1, seed: int = 0)
 def examples_from_rows(
     rows: list[dict], fmt: PromptFormat, permutations: int = 1, seed: int = 0
 ) -> list[Example]:
-    rng = random.Random(seed)
     out: list[Example] = []
-    for row in rows:
+    for ri, row in enumerate(rows):
         req = SystemOneRequest(state=row["state"], questions=row["questions"])
         for qid, q in req.questions.items():
             if qid not in row.get("labels", {}):
                 continue
-            for br in build_branches(qid, q, fmt, permutations, rng):
+            # orders are seeded per (row, question) so they never depend on neighbours
+            for br in build_branches(qid, q, fmt, permutations, seed=seed * 100003 + ri):
                 # br.keys is in *prompt order*, which differs per permutation: build the
                 # target against those keys so shuffled option letters stay correct.
                 target = target_vector(q.type, row["labels"][qid], br.keys)

@@ -37,10 +37,22 @@ text, so it cannot invent an answer that is not on your list, and there is nothi
 This repo holds a LoRA adapter (plus the fitted calibration temperature) for
 [reflex](https://github.com/kshetrajna12/reflex), an open re-creation of TypeSafe's
 [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev). The adapter was trained
-with a proper scoring rule on public datasets and synthetic data, which makes the
-probabilities *honest*: when it says 85 %, it is right about 85 % of the time.
+with a proper scoring rule on public datasets and synthetic data.
 
-## Quick start
+> **Status (2026-09-19): superseded for general use.** Controls run after this adapter was
+> published showed that the *frozen* `{base}` with reflex's current default prompt and no
+> calibration file scores better on data neither was trained on, and better on the public
+> [JevBench](https://github.com/fstandhartinger/jevbench) items (hard tier 0.658 vs 0.604,
+> calibration error 0.086 vs 0.117). The adapter is sharper on inputs that resemble its
+> training mix and worse on long, ambiguous ones. Full numbers and the reasoning:
+> [docs/results/frozen-vs-trained.md](https://github.com/kshetrajna12/reflex/blob/main/docs/results/frozen-vs-trained.md).
+>
+> **Recommended:** `git checkout stable && uv run reflex-serve --stable` in the reflex repo
+> (no adapter). This adapter stays published for reproducibility and as a worked example
+> of the fine-tuning recipe, which *is* the right tool when you have labels from your own
+> workload.
+
+## Quick start (this adapter)
 
 ```bash
 pip install uv && git clone https://github.com/kshetrajna12/reflex && cd reflex && uv sync
@@ -156,6 +168,9 @@ def main(argv=None):
     ap.add_argument("--repo", required=True, help="hub repo id, e.g. you/reflex-qwen3.5-4b-lora")
     ap.add_argument("--base", default="Qwen/Qwen3.5-4B")
     ap.add_argument("--private", action="store_true")
+    ap.add_argument(
+        "--card-only", action="store_true", help="upload only README.md (refresh the model card)"
+    )
     args = ap.parse_args(argv)
 
     from huggingface_hub import HfApi
@@ -166,6 +181,15 @@ def main(argv=None):
     (src / "README.md").write_text(model_card(args.base, src, args.repo))
     api = HfApi()
     api.create_repo(args.repo, private=args.private, exist_ok=True)
+    if args.card_only:
+        api.upload_file(
+            path_or_fileobj=str(src / "README.md"),
+            path_in_repo="README.md",
+            repo_id=args.repo,
+            commit_message="model card: superseded for general use by the frozen model + default prompt",
+        )
+        print(f"updated model card at https://huggingface.co/{args.repo}")
+        return
     api.upload_folder(
         folder_path=str(src),
         repo_id=args.repo,

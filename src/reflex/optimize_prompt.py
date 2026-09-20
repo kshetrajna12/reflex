@@ -38,6 +38,70 @@ def score_example(probs: np.ndarray, target: np.ndarray) -> float:
     return float(1.0 - 0.5 * np.abs(probs - target).sum())
 
 
+# Words that betray a prompt fitted to our training sources rather than to the task.
+BANNED_TERMS = [
+    "helpsteer",
+    "mmlu",
+    "civil comments",
+    "civil_comments",
+    "banking77",
+    "clinc",
+    "halueval",
+    "ms marco",
+    "msmarco",
+    "goemotions",
+    "go_emotions",
+    "reddit",
+    "codereview",
+    "github",
+    "toxic-chat",
+    "yelp",
+    "mnli",
+    "snli",
+    "dataset",
+    "benchmark",
+    "annotator",
+    "rater",
+    "raters",
+    "crowd",
+    "jev",
+    "typesafe",
+    "quality passage",
+]
+
+
+def leaked_terms(candidate: dict[str, str]) -> list[str]:
+    text = " ".join(candidate.values()).lower()
+    return [t for t in BANNED_TERMS if t in text]
+
+
+REFLECTION_TEMPLATE = """You are improving one component of the instructions given to a small decision model.
+The model receives a block of STATE (any text or JSON a user supplies), a QUESTION about it, and a fixed
+list of OPTIONS; it answers by choosing one option, and its confidence is read as a probability.
+
+The component you are editing:
+```
+<curr_param>
+```
+
+Examples of the model's behaviour with the current wording, with the target answer and feedback:
+```
+<side_info>
+```
+
+Rules for the new wording:
+- It must be GENERAL-PURPOSE. Users will ask about tickets, contracts, code, photos, anything. Do not
+  mention any dataset, source, domain, benchmark, or annotation process, and do not add rules that only
+  make sense for the examples shown.
+- Keep it short and plain: a system instruction or a one-line heading, not an essay.
+- Preserve the role of the component (a heading stays a heading; an answer-format line stays a
+  one-line instruction to answer with a single option label).
+- Prefer wording that makes the model read the whole state before committing, weigh the options
+  against each other, and spread probability across options when the state is genuinely ambiguous.
+
+Provide the new text within ``` blocks, and nothing else."""
+
+
 class ReflexAdapter:
     """GEPAAdapter for reflex: a candidate is a dict of prompt components."""
 
@@ -51,6 +115,15 @@ class ReflexAdapter:
     def evaluate(self, batch, candidate, capture_traces=False):
         from gepa.core.adapter import EvaluationBatch
 
+        leak = leaked_terms(candidate)
+        if leak:  # a prompt tuned to named datasets is not a general prompt: reject outright
+            log.info("rejecting candidate that names training sources: %s", leak)
+            outs = [{"rejected": f"names training sources: {leak}"}] * len(batch)
+            return EvaluationBatch(
+                outputs=outs,
+                scores=[0.0] * len(batch),
+                trajectories=outs if capture_traces else None,
+            )
         fmt = PromptFormat.with_texts(self.base_fmt, {k: candidate[k] for k in candidate})
         exs = examples_from_rows(batch, fmt)
         self.engine.fmt = fmt
@@ -109,9 +182,8 @@ class ReflexAdapter:
                     continue
                 rows.append(
                     {
-                        "Inputs": {
+                        "Inputs": {  # no dataset/source identifiers: the wording must stay general
                             "question_type": tr["kind"],
-                            "source": tr["source"],
                             "question": tr["question"],
                             "state_excerpt": tr["state_excerpt"],
                         },
@@ -205,6 +277,7 @@ def main(argv=None):
         ),
         max_metric_calls=args.max_metric_calls,
         reflection_minibatch_size=args.minibatch,
+        reflection_prompt_template=REFLECTION_TEMPLATE,
         run_dir=str(out.parent / (out.stem + "_gepa")),
         seed=args.seed,
         display_progress_bar=False,

@@ -119,6 +119,29 @@ def main(argv=None):
         help="default option-order averaging for requests that do not set it "
         "(2 halves letter-position bias at 2x branch cost)",
     )
+    ap.add_argument(
+        "--stable",
+        action="store_true",
+        help="take adapter/calibration/prompt defaults from serving/stable.json "
+        "(the configuration the `stable` git tag recommends); explicit flags still win",
+    )
+    ap.add_argument(
+        "--think",
+        type=int,
+        default=0,
+        help="System Two readout: reasoning tokens per branch before the logits are read "
+        "(slow; for offline teachers and experiments, not serving)",
+    )
+    ap.add_argument(
+        "--ensemble", default=None, help="prompt-ensemble variants json (reflex.ensemble)"
+    )
+    ap.add_argument(
+        "--think-if-disagree",
+        type=float,
+        default=None,
+        help="with --ensemble and --think: re-answer with reasoning when the wordings' "
+        "disagreement exceeds this (0-1); the fast path answers the rest",
+    )
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8008)
     ap.add_argument("--max-pack-tokens", type=int, default=8192)
@@ -131,19 +154,42 @@ def main(argv=None):
 
     from reflex.engine import Engine
 
+    if args.stable:
+        from reflex.serving import engine_kwargs, load_stable
+
+        kw = engine_kwargs(
+            load_stable(),
+            adapter_path=args.adapter,
+            calibration_path=args.calibration,
+            prompt_texts=args.prompt_texts,
+            prompt_style=args.prompt_style if args.prompt_style != "markdown" else None,
+            default_permutations=args.permutations if args.permutations != 1 else None,
+        )
+        if args.model != ap.get_default("model"):
+            kw["model_id"] = args.model
+    else:
+        kw = {
+            "model_id": args.model,
+            "calibration_path": args.calibration,
+            "adapter_path": args.adapter,
+            "default_permutations": args.permutations,
+            "prompt_style": args.prompt_style,
+            "prompt_texts": args.prompt_texts,
+        }
     engine = Engine.load(
-        args.model,
         dtype=getattr(torch, args.dtype),
         device=args.device,
-        calibration_path=args.calibration,
-        adapter_path=args.adapter,
         max_pack_tokens=args.max_pack_tokens,
-        default_permutations=args.permutations,
-        prompt_style=args.prompt_style,
-        prompt_texts=args.prompt_texts,
+        think_tokens=args.think,
+        ensemble=args.ensemble,
+        **kw,
     )
     if args.served_name:
         engine.model_name = args.served_name
+    if args.think_if_disagree is not None:
+        if not (args.ensemble and args.think):
+            raise SystemExit("--think-if-disagree needs both --ensemble and --think")
+        engine.think_if_disagree = args.think_if_disagree
     uvicorn.run(
         create_app(engine, api_key=args.api_key),
         host=args.host,

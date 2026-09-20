@@ -1,0 +1,10 @@
+{
+  "_comment": "Letters-only wording ensemble: the default prompt and one rewording that keeps the lettered yes/no readout. Drops the Yes/No-token variants of ensemble-v1, which carry a 'say yes' prior.",
+  "variants": [
+    {},
+    {"question_heading": "# Question", "options_heading": "# Choices",
+     "choice_ask": "Which option fits best? Answer with its letter only.",
+     "score_ask": "Which level fits best? Answer with its letter only.",
+     "noul_readout": "letters"}
+  ]
+}

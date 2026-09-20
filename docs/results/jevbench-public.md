@@ -26,23 +26,25 @@ Reproduce:
 | GPT-5.6 Luna / DeepSeek V4.1 Flash (chat models, verbalized probabilities) | 1.000 | 0.972 / 0.986 | 0.964 |
 | Jev 1.13.0 (TypeSafe, proprietary) | 1.000 | 0.986 | 0.730 |
 | SemIf (Qwen3.5-4B) | 1.000 | 0.986 | 0.613 |
-| **reflex mix3 (Qwen3.5-4B + LoRA, the published adapter)** | **1.000** | **0.944** | **0.604** |
+| **reflex, frozen Qwen3.5-4B + default prompt (commit dae6799, no adapter, no calibration)** | **1.000** | **0.917** | **0.658** |
+| reflex mix3 (Qwen3.5-4B + LoRA, the adapter first filed) | 1.000 | 0.944 | 0.604 |
 | reflex mix2 | 1.000 | 0.972 | 0.541 |
 | reflex mix1 | 1.000 | 0.931 | 0.595 |
 | open-alternative-jev (Qwen3.5-4B) | 1.000 | 0.833 | 0.568 |
 | system-one-open (Gemma 4 E2B LoRA) | 1.000 | 0.931 | 0.486 |
 | decider-2b (Qwen3.5-2B, self-reported in its bench request) | 1.000 | 0.847 | 0.459 |
 
-reflex mix3, other measurements: schema validity 100 %, 0 failed requests; ECE 0.025 (easy),
-0.033 (standard), 0.117 (hard); distribution fidelity on the 10 public probability items
-0.689; calibration axis on public hard items ≈ 72.7 (mix1 70.6, mix2 68.2). Latency p50
-0.12 s / p95 0.78 s on localhost (not comparable to the published Speed axis, which is
-measured from Germany and adjusted ×2 + 0.15 s for self-hosted endpoints).
+reflex (frozen, commit dae6799), other measurements: schema validity 100 %, 0 failed
+requests; ECE 0.020 (easy), 0.036 (standard), 0.086 (hard), all at temperature 1 with no
+calibration file; distribution fidelity on the 10 public probability items 0.708;
+calibration axis on public hard items ≈ 76.8 (mix3 72.7). Latency p50 0.12 s / p95 0.79 s
+on localhost (not comparable to the published Speed axis).
 
-The three adapters and the public 231 were used as a development gate four times (mix1,
-mix2, mix2 with refit temperatures, mix3); recipes were designed after seeing which public
-families the raw model failed. No benchmark item was used in training (8-gram overlap
-check, 0 rows). Expect held-out hard items to score somewhat below the public ones.
+The public 231 items were used as a development gate nine times across adapters,
+prompts and calibration variants; the two prompt changes in the default were selected on
+four external labelled sets first and confirmed here second. No benchmark item was used
+for training or for fitting anything (8-gram overlap check, 0 rows). Expect held-out hard
+items to score somewhat below the public ones.
 
 ## What the misses are
 

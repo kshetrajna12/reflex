@@ -246,11 +246,19 @@ model on your GPU. Expect a rougher ordering than the 4B; it is the same questio
 ## How it compares
 
 On the public items of [JevBench](https://github.com/fstandhartinger/jevbench), a
-benchmark for Jev-class decision models, the published adapter scores 1.000 / 0.944 / 0.604
-on the easy / standard / hard tiers, against 1.000 / 0.986 / 0.730 for Jev itself and
-1.000 / 0.986 / 0.613 for the strongest other open 4B rebuild, on the same items. That
-is our own run; an official run has been requested. Details, caveats and what the misses
-are: [docs/results/jevbench-public.md](docs/results/jevbench-public.md).
+benchmark for Jev-class decision models, the **frozen** Qwen3.5-4B with reflex's default
+prompt, reading each question in two option orders, scores 1.000 / 0.917 / 0.685 on the
+easy / standard / hard tiers, against
+1.000 / 0.986 / 0.730 for Jev itself and 1.000 / 0.986 / 0.613 for the strongest other
+open 4B rebuild, on the same items, with hard-tier calibration error 0.081 and no
+calibration file. That is our own run; an official run has been requested.
+
+Fine-tuning turned out to be a trap for general use: the adapters trained here improved
+data that looked like their training data and cost accuracy on long, ambiguous inputs,
+and prompt optimisation with GEPA did the same in miniature. The numbers, the controls
+and the two prompt changes that *did* transfer are in
+[docs/results/frozen-vs-trained.md](docs/results/frozen-vs-trained.md); the public-item
+comparison is in [docs/results/jevbench-public.md](docs/results/jevbench-public.md).
 
 ## How it works, in one paragraph
 
