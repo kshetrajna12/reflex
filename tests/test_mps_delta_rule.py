@@ -9,6 +9,12 @@ reference = pytest.importorskip(
     "transformers.models.qwen3_5.modeling_qwen3_5"
 ).torch_chunk_gated_delta_rule
 
+# On a CUDA box with flash-linear-attention installed, transformers' "reference" resolves
+# to the Triton kernel, which refuses CPU tensors; the comparison is meaningful on CPU/MPS.
+cpu_reference = pytest.mark.skipif(
+    torch.cuda.is_available(), reason="reference dispatches to the Triton kernel on CUDA"
+)
+
 
 def test_unit_lower_inverse():
     torch.manual_seed(0)
@@ -18,6 +24,7 @@ def test_unit_lower_inverse():
     assert torch.allclose(unit_lower_inverse(system) @ unit, torch.eye(64, dtype=torch.float64))
 
 
+@cpu_reference
 @pytest.mark.parametrize("seq_len", [1, 63, 64, 200])
 @pytest.mark.parametrize("with_state", [False, True])
 def test_matches_reference(seq_len, with_state):
@@ -40,6 +47,7 @@ def test_matches_reference(seq_len, with_state):
     assert torch.allclose(got_state, want_state, atol=1e-5)
 
 
+@cpu_reference
 def test_nearly_parallel_keys():
     """Real activations: neighbouring keys are almost parallel and beta is near 1, so the
     triangular system has entries near 1. A Neumann-series inverse overflows here."""
