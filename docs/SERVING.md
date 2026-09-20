@@ -152,5 +152,18 @@ nightly image loads with no extra flags) wins everything.
 not: pooled external-set ECE rises from 0.044 to 0.067, and hard-tier ECE on the public
 items from 0.061 to 0.087. Quantization moves the probability distribution about ten times
 more than the choice of backend does. If you rely on the numbers rather than the argmax,
-fit a temperature on the NVFP4 checkpoint itself (`reflex-calibrate`) and re-measure before
-thresholding on it. A calibration file fitted on bf16 does not transfer.
+fit a temperature **on your own labelled traffic** and re-measure before thresholding on
+it.
+
+Refitting on somebody else's traffic does not work, and `docs/results/nvfp4-27b.md` is the
+measurement: temperatures fitted on the four external sets halve pooled external ECE
+(0.062 -> 0.026, and five-fold cross-validation inside each set says that holds on unseen
+items of the same kind), yet the same file makes calibration error **worse on all three
+public-benchmark tiers**. That fit ships as `calibration/nvfp4-27b.json` so it is
+reproducible, and is passed like any other calibration file:
+
+    reflex-serve --backend sglang --sglang-url http://127.0.0.1:30000 \
+        --model RadixArk/Qwen3.8-27B-NVFP4 --calibration calibration/nvfp4-27b.json
+
+Use it only if your traffic resembles the external sets (`runs/external_eval.jsonl`), and
+measure before you do. It is not a general correction for the checkpoint.

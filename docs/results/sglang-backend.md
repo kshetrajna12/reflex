@@ -373,6 +373,13 @@ refitted on the NVFP4 checkpoint**, never one fitted on bf16, and re-measure ECE
 refitting before it goes anywhere near a threshold a caller trusts. Whether a refit
 recovers the 0.023 is the obvious next experiment and was not run here.
 
+> **The refit was run since, and this paragraph is too optimistic.**
+> `docs/results/nvfp4-27b.md` fits the temperatures, recovers the external-set ECE
+> (0.062 -> 0.026, cross-validated within each set) - and then finds the same file makes
+> calibration error worse on every public-benchmark tier, and that temperatures fitted on
+> *bf16* repair NVFP4's pooled ECE nearly as well. What a refit needs is your own labelled
+> traffic, not this checkpoint's.
+
 For anything that ships an uncalibrated readout and thresholds on the argmax, NVFP4 is
 simply the better deployment.
 
