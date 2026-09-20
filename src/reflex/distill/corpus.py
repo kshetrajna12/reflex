@@ -9,6 +9,7 @@ benchmark; `reflex-data check-overlap` is run on the result.
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import random
 from collections.abc import Callable, Iterator
@@ -21,6 +22,18 @@ def _load(name: str, cfg: str | None, split: str, seed: int):
 
     ds = load_dataset(name, cfg, split=split, streaming=True)
     return ds.shuffle(seed=seed, buffer_size=5000)
+
+
+class _Dry(Exception):
+    """A source stream ran out; the domain ends (a StopIteration inside a generator
+    would become a RuntimeError instead)."""
+
+
+def _next(it):
+    try:
+        return builtins.next(it)
+    except StopIteration:
+        raise _Dry from None
 
 
 def _clip(s: str, limit: int) -> str:
@@ -60,11 +73,11 @@ def chat_prompt(seed: int) -> Iterator[dict]:
     c = _load("allenai/real-toxicity-prompts", None, "train", seed)
     ia, ib, ic = iter(a), iter(b), iter(c)
     while True:
-        r = next(ia)
+        r = _next(ia)
         yield {"state": {"user_message": r["prompt"]}, "origin": "ultrachat"}
-        r = next(ib)
+        r = _next(ib)
         yield {"state": {"user_message": r["prompt"]}, "origin": "pku-saferlhf"}
-        r = next(ic)
+        r = _next(ic)
         yield {
             "state": {"user_message": r["prompt"]["text"] + r["continuation"]["text"]},
             "origin": "real-toxicity-prompts",
@@ -77,9 +90,9 @@ def review(seed: int) -> Iterator[dict]:
         iter(_load("stanfordnlp/imdb", None, "train", seed)),
     )
     while True:
-        r = next(a)
+        r = _next(a)
         yield {"state": {"title": r["title"], "review": r["content"]}, "origin": "amazon_polarity"}
-        r = next(b)
+        r = _next(b)
         yield {
             "state": {"review": _clip(r["text"].replace("<br />", "\n"), 3000)},
             "origin": "imdb",
@@ -92,8 +105,8 @@ def news(seed: int) -> Iterator[dict]:
         iter(_load("abisee/cnn_dailymail", "3.0.0", "train", seed)),
     )
     while True:
-        yield {"state": {"headline_and_lede": next(a)["text"]}, "origin": "ag_news"}
-        yield {"state": {"article": _clip(next(b)["article"], 5000)}, "origin": "cnn_dailymail"}
+        yield {"state": {"headline_and_lede": _next(a)["text"]}, "origin": "ag_news"}
+        yield {"state": {"article": _clip(_next(b)["article"], 5000)}, "origin": "cnn_dailymail"}
 
 
 def legal_clause(seed: int) -> Iterator[dict]:
@@ -103,17 +116,17 @@ def legal_clause(seed: int) -> Iterator[dict]:
     tos = iter(_load("coastalcph/lex_glue", "unfair_tos", "train", seed))
     rng = random.Random(seed)
     while True:
-        yield {"state": {"clause": next(led)["text"]}, "origin": "ledgar"}
+        yield {"state": {"clause": _next(led)["text"]}, "origin": "ledgar"}
         k = rng.randint(4, 6)
         yield {
             "state": {
-                "contract_excerpt": "\n\n".join(f"{i + 1}. {next(led)['text']}" for i in range(k))
+                "contract_excerpt": "\n\n".join(f"{i + 1}. {_next(led)['text']}" for i in range(k))
             },
             "origin": "ledgar-excerpt",
         }
         yield {
             "state": {
-                "terms_of_service": " ".join(next(tos)["text"] for _ in range(rng.randint(3, 8)))
+                "terms_of_service": " ".join(_next(tos)["text"] for _ in range(rng.randint(3, 8)))
             },
             "origin": "unfair_tos",
         }
@@ -123,8 +136,8 @@ def long_document(seed: int) -> Iterator[dict]:
     a = iter(_load("ccdv/govreport-summarization", None, "train", seed))
     b = iter(_load("HuggingFaceFW/fineweb-edu", "sample-10BT", "train", seed))
     while True:
-        yield {"state": {"report": _clip(next(a)["report"], 12000)}, "origin": "govreport"}
-        r = next(b)
+        yield {"state": {"report": _clip(_next(a)["report"], 12000)}, "origin": "govreport"}
+        r = _next(b)
         if 1500 <= len(r["text"]) <= 8000:
             yield {"state": {"document": r["text"]}, "origin": "fineweb-edu"}
 
@@ -133,7 +146,7 @@ def forum_post(seed: int) -> Iterator[dict]:
     a = iter(_load("sentence-transformers/reddit-title-body", None, "train", seed))
     b = iter(_load("jonathanli/legal-advice-reddit", None, "train", seed))
     while True:
-        r = next(a)
+        r = _next(a)
         yield {
             "state": {
                 "subreddit": r["subreddit"],
@@ -142,7 +155,7 @@ def forum_post(seed: int) -> Iterator[dict]:
             },
             "origin": "reddit-title-body",
         }
-        r = next(b)
+        r = _next(b)
         yield {
             "state": {"title": r["title"], "post": _clip(r["body"], 3000)},
             "origin": "legal-advice-reddit",
@@ -154,8 +167,8 @@ def assistant_reply(seed: int) -> Iterator[dict]:
     a = iter(_load("nvidia/HelpSteer3", "preference", "train", seed))
     b = iter(_load("Anthropic/hh-rlhf", None, "train", seed))
     while True:
-        r = next(a)
-        if r.get("language") != "English":
+        r = _next(a)
+        if not str(r.get("language", "en")).lower().startswith("en"):
             continue
         ctx = r["context"]
         conv = (
@@ -170,7 +183,7 @@ def assistant_reply(seed: int) -> Iterator[dict]:
             },
             "origin": "helpsteer3",
         }
-        r = next(b)
+        r = _next(b)
         yield {"state": {"conversation": _clip(r["chosen"], 4000)}, "origin": "hh-rlhf"}
 
 
@@ -178,7 +191,7 @@ def qa_passage(seed: int) -> Iterator[dict]:
     a = iter(_load("hotpotqa/hotpot_qa", "distractor", "train", seed))
     b = iter(_load("databricks/databricks-dolly-15k", None, "train", seed))
     while True:
-        r = next(a)
+        r = _next(a)
         paras = ["".join(s) for s in r["context"]["sentences"]]
         yield {
             "state": {
@@ -188,7 +201,7 @@ def qa_passage(seed: int) -> Iterator[dict]:
             },
             "origin": "hotpot_qa",
         }
-        r = next(b)
+        r = _next(b)
         if r.get("context"):
             yield {
                 "state": {
@@ -220,13 +233,24 @@ def _size(state) -> int:
     return len(state) if isinstance(state, str) else len(json.dumps(state))
 
 
+def _iter_dry(gen):
+    try:
+        yield from gen
+    except _Dry:
+        return
+
+
 def build(per_domain: int, seed: int = 0, domains: list[str] | None = None) -> Iterator[dict]:
     """`per_domain` states from each domain, de-duplicated, within length bounds, with a
     stable id so later stages can join on it."""
     seen: set[str] = set()
     for name in domains or DOMAINS:
         n = 0
-        for r in DOMAINS[name](seed):
+        try:
+            gen = DOMAINS[name](seed)
+        except _Dry:
+            continue
+        for r in _iter_dry(gen):
             size = _size(r["state"])
             if not MIN_CHARS <= size <= MAX_CHARS:
                 continue
