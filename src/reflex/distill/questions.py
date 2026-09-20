@@ -278,6 +278,14 @@ def validate(state, questions: dict) -> dict:
     return good
 
 
+def clean(q: dict) -> dict:
+    """Only the fields a question has; LLMs add ids and commentary."""
+    item = {"type": q.get("type"), "instructions": q.get("instructions")}
+    if q.get("type") in ("choice", "score"):
+        item["criteria"] = q.get("criteria")
+    return item
+
+
 def _llm_questions(call, state, n: int) -> dict:
     text = call(GEN_PROMPT.format(n=n, state=json.dumps(state, ensure_ascii=False)[:9000]))
     arr = _extract_json_array(text) or []
@@ -287,10 +295,7 @@ def _llm_questions(call, state, n: int) -> dict:
             continue
         qid = re.sub(r"[^a-z0-9_]", "_", str(q.get("id") or f"q{i}").lower())[:40] or f"q{i}"
         qid = f"llm_{qid}"
-        item = {"type": q.get("type"), "instructions": q.get("instructions")}
-        if q.get("type") in ("choice", "score"):
-            item["criteria"] = q.get("criteria")
-        qs[qid] = item
+        qs[qid] = clean(q)
     return validate(state, qs)
 
 

@@ -31,8 +31,24 @@ def cmd_questions(a):
         if not key:
             raise SystemExit(f"set {a.key_env} for the question-writing model")
         call = gateway_chat(a.gateway, key, a.model)
-    n = write_jsonl(attach(rows, call, a.per_state, a.workers, a.bank_max, a.seed), a.out)
-    log.info("wrote %d rows with questions to %s", n, a.out)
+    out = list(attach(rows, call, a.per_state, a.workers, a.bank_max, a.seed))
+    # the anchor slice is labelled by the frozen student, on states the teacher never
+    # labels, so it can only pull toward the base model, never toward the teacher
+    teach = [r for r in out if _split(r["id"], a.seed + 1) >= a.anchor_frac]
+    anchor = [r for r in out if _split(r["id"], a.seed + 1) < a.anchor_frac]
+    write_jsonl(teach, a.out)
+    if a.anchor_out:
+        write_jsonl(anchor, a.anchor_out)
+    nq = sum(len(r["questions"]) for r in out)
+    log.info(
+        "%d states, %d questions -> %d teacher states (%s), %d anchor states (%s)",
+        len(out),
+        nq,
+        len(teach),
+        a.out,
+        len(anchor),
+        a.anchor_out,
+    )
 
 
 def cmd_label(a):
@@ -129,6 +145,15 @@ def main(argv=None):
     q.add_argument("--bank-max", type=int, default=3)
     q.add_argument("--workers", type=int, default=8)
     q.add_argument("--seed", type=int, default=0)
+    q.add_argument(
+        "--anchor-frac",
+        type=float,
+        default=0.2,
+        help="share of states reserved for the anchor slice",
+    )
+    q.add_argument(
+        "--anchor-out", default=None, help="where the anchor slice goes (default: dropped)"
+    )
     q.set_defaults(fn=cmd_questions)
 
     lab = sub.add_parser("label", help="a teacher answers through reflex")
