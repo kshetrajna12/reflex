@@ -82,6 +82,8 @@ DEFAULT_TEXTS = {
     "noul_true_default": "The statement is true.",
     "noul_false_default": "The statement is false.",
     "score_level_prefix": "(level {i} of {n})",
+    # "yesno" reads the Yes/No tokens; "letters" presents yes/no as a lettered pair (A/B)
+    "noul_readout": "yesno",
 }
 
 COMPACT_SYSTEM_PROMPT = (
@@ -179,6 +181,13 @@ def build_branches(
     if isinstance(q, NoulQuestion):
         t = render_text(q.criteria.true) if q.criteria else ""
         f = render_text(q.criteria.false) if q.criteria else ""
+        if fmt.t("noul_readout") == "letters":
+            labelled = [
+                ("A", "yes: " + (t or fmt.t("noul_true_default"))),
+                ("B", "no: " + (f or fmt.t("noul_false_default"))),
+            ]
+            body = _options_block(q.instructions, labelled, fmt.t("choice_ask"), fmt)
+            return [Branch(qid, "noul", fmt.branch(body), ["A", "B"], [True, False])]
         labelled = [(YES, t or fmt.t("noul_true_default")), (NO, f or fmt.t("noul_false_default"))]
         body = _options_block(q.instructions, labelled, fmt.t("noul_ask"), fmt)
         return [Branch(qid, "noul", fmt.branch(body), [YES, NO], [True, False])]
