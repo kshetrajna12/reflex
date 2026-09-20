@@ -131,3 +131,24 @@ already answers honestly, external ECE rises on all four sets, and public hard-t
 goes from 0.086 (T = 1) to 0.135. The frozen model with this prompt and no calibration
 file is the configuration we stand behind for general use; fit a temperature only on
 your own workload's labels, and only if its raw ECE there says you need one.
+
+## 6. A soft-label, permutation-augmented adapter (mix4) does not transfer either
+
+The obvious rescue for training is better data rather than less of it: soft targets, no
+position prior, long documents. mix4 did exactly that
+([lora-mix4-qwen3.5-4b.md](lora-mix4-qwen3.5-4b.md)) and got the in-distribution result
+one would hope for (held-out ECE 0.157 → 0.029 with fitted temperatures close to 1), then
+lost on the external sets and on the public hard tier anyway:
+
+| | frozen (same prompt) | mix4 |
+|---|---|---|
+| toxic-chat (ext) | 0.787 | 0.533 (answers "toxic" on 290/300) |
+| MNLI mismatched (ext) | 0.840 | 0.807 |
+| public hard | 0.640 | 0.595 |
+| public hard ECE | 0.143 | 0.189 |
+| public standard | 0.931 | 0.958 |
+
+The lesson generalises the earlier one: what an adapter learns from a source is a rule
+for that source's wording, and it applies the rule with conviction to neighbouring tasks
+where it is wrong. Fine-tune reflex on your *own* workload's labels, where that is a
+feature; do not expect a public-data mix to make it a better general judge.
