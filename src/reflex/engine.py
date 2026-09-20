@@ -223,6 +223,9 @@ class Engine:
         # distributions are averaged; [fmt] alone is the plain single-prompt readout
         self.variants: list[PromptFormat] = [fmt]
         self.last_disagreement: dict[str, float] = {}
+        # System Two on demand: when the ensemble's wordings disagree by more than this,
+        # the question is re-answered with the thinking readout (think_tokens must be > 0)
+        self.think_if_disagree: float | None = None
         self.cal = calibration or Calibration()
         self.max_pack_tokens = max_pack_tokens
         self.max_branch_tokens = max_branch_tokens
@@ -548,14 +551,28 @@ class Engine:
         answers = {}
         self.last_disagreement = {}
         for qid, q in req.questions.items():
-            key_probs = merge_branches(q.type, per_q[qid], self.cal, state_tokens=len(entry.ids))
-            answers[qid] = to_answer(q.type, key_probs, q)
             if len(per_q[qid]) > 1:
                 from reflex.ensemble import disagreement
 
                 self.last_disagreement[qid] = disagreement(
                     per_q[qid], self.cal, q.type, len(entry.ids)
                 )
+            results = per_q[qid]
+            if (
+                self.think_if_disagree is not None
+                and self.think_tokens
+                and self.last_disagreement.get(qid, 0.0) > self.think_if_disagree
+            ):
+                from reflex.think import think_logits
+
+                # escalate: the default wording's branches, answered after reasoning
+                own = [b for b in branches if b.qid == qid][
+                    : max(1, len(results) // len(self.variants))
+                ]
+                rows = think_logits(self, [(req.state, b) for b in own], self.think_tokens)
+                results = list(zip(own, rows))
+            key_probs = merge_branches(q.type, results, self.cal, state_tokens=len(entry.ids))
+            answers[qid] = to_answer(q.type, key_probs, q)
 
         q_tokens = sum(len(b) for b in branch_ids)
         usage = Usage(
