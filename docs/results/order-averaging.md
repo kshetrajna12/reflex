@@ -99,6 +99,16 @@ trades items: multi-hop drops to 0.50 while tradeoff rises to 0.83. The disagree
 as a gate; what it routes to is not yet a better judge on hard items, and the p95 makes it a
 batch-mode option only.
 
-## Pending rows
+## 27B, two distinct orders, external sets
 
-* 27B, two orders, external sets.
+| | 1 order | **2 distinct orders** | 4B, 2 orders |
+|---|---|---|---|
+| support intents | 0.927 | 0.937 | 0.917 |
+| MNLI mismatched | 0.850 | 0.850 | 0.837 |
+| toxic-chat | 0.740 | **0.813** | 0.833 |
+| Yelp stars | 0.683 | 0.683 | 0.653 |
+| 4-set mean | 0.800 | **0.821** | 0.810 |
+
+Reading yes/no questions both ways round removes most of the 27B's over-flagging on
+toxic-chat (its one external weakness, ECE there 0.148 → 0.072). With that, the 27B at two
+orders is the strongest configuration we have on every gate.
