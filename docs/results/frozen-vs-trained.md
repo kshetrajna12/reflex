@@ -100,3 +100,27 @@ computed on) and wrong for easier inputs, which they over-soften. A temperature 
 property of a distribution, not of a model. The recommendation that follows is the one
 the README already makes: fit `calibration.json` on a few hundred labelled examples from
 the workload you will run, and expect calibration measured elsewhere to be optimistic.
+
+## 5. Two prompt ablations that do transfer
+
+Prompted by how SemIf frames its requests, two one-line changes to reflex's default
+prompt were tested on the frozen model, external sets first (`prompts/ablation-*.json`):
+
+* yes/no questions presented as a lettered pair ("A. yes: …", "B. no: …") and read from
+  the letter logits, instead of reading the Yes/No tokens;
+* headings "# Evidence" / "# Criterion" instead of "# State" / "# Question".
+
+| | default | lettered yes/no | Evidence/Criterion | both |
+|---|---|---|---|---|
+| toxic-chat (ext, yes/no) | 0.787 / ECE 0.104 | 0.797 / 0.083 | 0.823 / 0.059 | **0.843 / 0.046** |
+| support intents (ext) | 0.910 | 0.910 | 0.907 | 0.907 |
+| MNLI mismatched (ext) | 0.840 | 0.840 | 0.840 | 0.840 |
+| Yelp stars (ext) | 0.650 | 0.650 | 0.650 | 0.640 |
+| public standard | 0.931 | | | 0.917 |
+| public hard | 0.640 | | | **0.658** |
+| public hard ECE (T = 1) | 0.143 | | | **0.086** |
+
+Unlike the GEPA result, these gains appear on data the change was not selected on. The
+yes/no token readout carried a "say Yes" prior that the lettered pair removes, and the
+verification framing suits questions that ask whether a condition holds. The cost is one
+standard-tier item. Both changes are in the default prompt from this commit on.
