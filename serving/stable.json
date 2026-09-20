@@ -1,0 +1,16 @@
+{
+  "_comment": "The configuration reflex recommends for serving. The git tag `stable` points at the commit this file describes; move both together, only after the external-set and public-item gates pass (docs/SERVING.md, 'Releases').",
+  "model": "Qwen/Qwen3.5-4B",
+  "adapter": null,
+  "calibration": null,
+  "prompt_style": "markdown",
+  "prompt_texts": null,
+  "permutations": 1,
+  "released": "2026-09-19",
+  "selected_on": {
+    "external_sets_acc": {"bitext_support": 0.907, "mnli_mismatched": 0.840, "toxic_chat": 0.843, "yelp_stars": 0.640},
+    "jevbench_public_acc": {"easy": 1.000, "standard": 0.917, "hard": 0.658},
+    "jevbench_public_hard_ece": 0.086,
+    "notes": "frozen base model; docs/results/frozen-vs-trained.md explains why no adapter and no calibration file"
+  }
+}

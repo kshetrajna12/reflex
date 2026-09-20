@@ -49,3 +49,24 @@ re-run can be checked against them.
 
 uploads the adapter weights, `calibration.json`, the training-time evaluation report and
 a model card. Anyone can then serve it with `--adapter <you>/reflex-qwen3.5-4b-lora`.
+
+## Releases: the `stable` tag and `serving/stable.json`
+
+Experiments land on `main`, including the ones that lose. The configuration we
+actually recommend is recorded in two places that move together:
+
+* the git tag **`stable`**, which points at the commit to deploy;
+* **`serving/stable.json`** at that commit, which names the base model, the adapter
+  (a hub id, or `null` for the frozen model), the calibration file, the prompt style and
+  prompt-text overrides, plus the gate numbers it was selected on.
+
+`reflex-serve --stable` reads the file and applies it, and `reflex.serving.load_stable()`
+returns it for other entrypoints, so a deployer that tracks the tag never has to change a
+flag when a better configuration is found. A run only gets to move the tag after it beats
+the current `stable` on the never-trained external sets *and* on the public benchmark
+items (`docs/results/frozen-vs-trained.md` has the method); the release commit updates the
+manifest, then:
+
+    git tag -f stable && git push -f origin stable
+
+The current `stable` is the frozen model with the default prompt and no calibration file.
