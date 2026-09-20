@@ -9,8 +9,10 @@ configuration on a rented GPU.
 | | |
 |---|---|
 | base model | `Qwen/Qwen3.5-4B` (bf16) |
-| adapter | none for the general-purpose configuration (the frozen model with reflex's default prompt scores best on held-out external data); `kshetrajna12/reflex-qwen3.5-4b-lora` is the earlier LoRA, still servable with `--adapter` |
-| reflex commit | `dae6799` |
+| adapter | none. The frozen model with reflex's default prompt scores best on held-out external data. `kshetrajna12/reflex-qwen3.5-4b-lora` is the earlier LoRA, superseded (its model card says so) and still servable with `--adapter` |
+| calibration | none; temperature 1 |
+| option orders | two distinct orders per question, averaged (`permutations: 2`) |
+| reflex commit | whatever the `stable` tag points at; `serving/stable.json` there is the configuration |
 | endpoint | `POST /v1/systemone`, TypeSafe-compatible; `model` may be omitted |
 | GPU | any CUDA GPU with ≥ 16 GB (RTX PRO 4500 32 GB, A40, L4 all fine); ~9 GB weights |
 | readout | the fast single pass, always; the server has no reasoning or escalation mode, so p95 is a small multiple of p50 |
@@ -19,10 +21,13 @@ configuration on a rented GPU.
 
 With uv (Python 3.12):
 
-    git clone https://github.com/kshetrajna12/reflex && cd reflex && git checkout <sha>
+    git clone https://github.com/kshetrajna12/reflex && cd reflex && git checkout stable
     uv sync
-    REFLEX_API_KEY=<secret> uv run reflex-serve --model Qwen/Qwen3.5-4B --served-name reflex --host 0.0.0.0 --port 8000
-    # add --adapter kshetrajna12/reflex-qwen3.5-4b-lora to serve the earlier fine-tuned variant instead
+    REFLEX_API_KEY=<secret> uv run reflex-serve --stable --served-name reflex --host 0.0.0.0 --port 8000
+    # --stable reads serving/stable.json; spelled out that is
+    #   --model Qwen/Qwen3.5-4B --permutations 2, no adapter and no calibration file.
+    # Pin a specific experiment with `git checkout <sha>` and explicit flags instead;
+    # explicit flags win over the manifest.
 
 With Docker:
 
@@ -70,6 +75,11 @@ manifest, then:
 
     git tag -f stable && git push -f origin stable
 
+The sparkstation deployment follows the tag: it redeploys from whatever `stable` points
+at and reads `serving/stable.json` for its flags, so moving the tag moves the deployment
+and no flag is set by hand anywhere. Anything else that tracks the tag gets the same
+configuration for free; that is the whole point of the manifest.
+
 The current `stable` is the frozen model with the default prompt, no calibration file, and
 `permutations: 2`: every choice or score question is asked in two distinct option orders (yes/no
 questions in both orders) and the two distributions are averaged. Same forward pass, about
@@ -94,6 +104,14 @@ Start SGLang on the checkpoint you want to serve, then point reflex at it:
 
     uv run reflex-serve --backend sglang --sglang-url http://127.0.0.1:30000 \
         --model Qwen/Qwen3.5-4B --permutations 2 --port 8008
+
+**About that image tag.** Qwen3.5's hybrid attention needs a recent SGLang, and the
+nightly we measured on, `lmsysorg/sglang:nightly-dev-cu13-20260813-273d978b`, has since
+been removed from Docker Hub. Nightly tags are deleted on a rolling basis, so pin the
+image by **digest** (`lmsysorg/sglang@sha256:…`) and keep a copy in your own registry once
+you have one that works. A newer nightly or a release that supports the checkpoint is
+fine; check that it launches the model before relying on it, and re-measure, because
+neither latency nor calibration carries over between engine versions for free.
 
 reflex still renders the prefix and the branches itself, so `--permutations`,
 `--prompt-style`, `--prompt-texts` and `--calibration` all behave as they do on the

@@ -25,6 +25,10 @@ that gap inside one pass is the whole job.
    0.061, about a second per request ([weight-classes.md](results/weight-classes.md)). The
    9B is not a middle ground; it costs twice the 4B's latency for the same hard-tier
    accuracy and worse calibration.
+   Serving the 27B is an engine question as much as a model one: through `--backend
+   sglang` on the NVFP4 checkpoint it answers in about 208 ms warm, at the cost of
+   calibration (hard ECE 0.061 → 0.087), which has to be refitted on that checkpoint
+   before anyone thresholds on it ([sglang-backend.md](results/sglang-backend.md)).
 3. **Data-driven calibration.** Per-primitive temperatures and the calibration head are
    fitted, not guessed, and they are what make the probabilities usable as probabilities.
    The remaining distance to Jev is as much calibration as accuracy: 0.081 against 0.031 on
@@ -66,3 +70,6 @@ On the public items: hard >= 0.70, standard >= 0.95, hard-tier ECE <= 0.05, p50 
 and p95 within a small multiple of p50 because nothing branches into a slow path. The public
 items have been consulted throughout development, so they are a development suite and not an
 independent test; an official run is the only claim that counts.
+
+Every experiment behind this page, including the ones that lost, is indexed in
+[results/README.md](results/README.md).

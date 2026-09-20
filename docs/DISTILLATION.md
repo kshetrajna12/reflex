@@ -1,5 +1,13 @@
 # Distilling judgement from a stronger model
 
+> **Status.** The run below was kept as evidence and not released: the student learned its
+> teacher without collapsing, and still did not judge the benchmark's hard items better
+> than the frozen model, which remains `stable`
+> ([results/lora-distill-qwen3.5-4b.md](results/lora-distill-qwen3.5-4b.md)). Read this
+> pipeline as the tool it now is: a way to distil a stronger model's judgement **on your
+> own workload**, where the states and questions you label are the ones you will serve.
+> `reflex-distill label --think N` is offline only, like everything that reasons here.
+
 `reflex-distill` is the training route that survived the lesson in
 [results/frozen-vs-trained.md](results/frozen-vs-trained.md): adapters trained on labelled
 datasets learn rules for *those datasets' wording* and apply them, over-confidently, to

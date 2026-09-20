@@ -44,14 +44,20 @@ there is no decoding loop anywhere.
 
 ```
                        ┌──────────── one forward pass ────────────┐
- state ──► KV cache ──►│ branch q1 │ branch q2 │ branch q3 │ ...  │
-   (encoded once,      │  ▲ attends to state + itself only         │
-    LRU by hash)       └──┴────────┴───────────┴───────────────────┘
-                              │           │           │
+ state ──► KV cache ──►│ q1 order A │ q1 order B │ q2 order A │ … │
+   (encoded once,      │ ▲ a branch sees the state and itself only│
+    LRU by hash)       └────────────┴────────────┴────────────┴───┘
+                              │            │            │
                          logits@last  logits@last  logits@last
-                              │           │           │
-                      restrict to {A,B,C} {Yes,No}  {A,B,C}  ─► temperature ─► softmax
+                              │            │            │
+               restrict to the letter tokens of that branch
+                              │            │            │
+               temperature ─► softmax ─► average over the orders
 ```
+
+One request is one forward pass. There is no decoding loop, no reasoning and no
+escalation anywhere on this path, and `reflex-serve` has no flag that can make a request
+slower than a forward pass ([VISION.md](VISION.md)).
 
 1. **Shared state encoding** (`Engine.encode_state`). The state prefix (text, plus images
    through the vision encoder on VL models) is tokenised and run once; its cache is kept
@@ -71,11 +77,42 @@ there is no decoding loop anywhere.
    `tests/test_engine_gpu.py` and `tests/test_engine_vl_gpu.py` check both strategies are
    numerically identical to running each question on its own (text and image state).
 3. **Direct probability readout** (`reflex.readout`). At the last token of each branch we
-   take the next-token logits, restrict them to the label tokens (`A/B/C…` for choice and
-   score, `Yes/No` for noul), temperature-scale and softmax. That distribution is the
-   answer. `score` reports the probability-weighted level; `confidence` is
-   `1 - normalised entropy` (pluggable; the full distribution is always returned).
-4. **Calibration** (`reflex.train.calibrate`, "RLCD-lite"). Jev is trained with
+   take the next-token logits, restrict them to that branch's label tokens,
+   temperature-scale and softmax. That distribution is the answer. `score` reports the
+   probability-weighted level; `confidence` is `1 - normalised entropy` (pluggable; the
+   full distribution is always returned).
+
+   The labels are **letters** (`A/B/C…`) for all three primitives. A yes/no question is
+   presented as a lettered pair rather than read off the `Yes`/`No` tokens
+   (`noul_readout: "letters"` in `prompt.DEFAULT_TEXTS`), because an answer word carries a
+   stylistic pull that a letter does not. That change and the `# Evidence` / `# Criterion`
+   / `# Options` headings are the two prompt edits that transferred on held-out external
+   data ([results/frozen-vs-trained.md](results/frozen-vs-trained.md)); every piece of
+   wording the model sees is a named component in `prompt.DEFAULT_TEXTS`, which is what
+   `reflex-optimize` and the ensemble variants edit.
+4. **Two option orders, averaged** (`prompt.distinct_orders`, `readout.merge_branches`).
+   A choice or score question is rendered in `permutations` *distinct* option orders: the
+   identity order first, then distinct shuffles. A yes/no question's second order is
+   always the swap, so binary coverage is balanced. Each order is another branch in the
+   same forward pass; the distributions are mapped back to semantic keys through
+   `Branch.keys` and averaged. Orders come from a generator seeded by `(seed, qid)`, so
+   adding an unrelated question cannot change another question's orders.
+
+   `permutations: 2` is the `stable` configuration. It costs about 1.1x the latency and
+   buys hard-tier accuracy 0.658 → 0.685 and roughly half the pooled external calibration
+   error ([results/order-averaging.md](results/order-averaging.md)). A request may set
+   `permutations` itself; `--permutations N` sets the default for requests that do not.
+5. **Prompt ensembles and disagreement** (`reflex.ensemble`, optional, off by default).
+   `--ensemble prompts/ensemble-v1.json` adds question-side wording variants, each an
+   extra branch in the *same* pass. A variant may change the headings, the ask lines and
+   the readout style but never the system prompt or the state heading, which is checked,
+   so all variants share one state cache. `ensemble.disagreement` is the mean
+   total-variation distance between a question's branches and their mean: 0 when every
+   wording and order agrees, 1 when they scatter. Wording ensembles did not pay for
+   themselves on quality ([results/order-averaging.md](results/order-averaging.md), "What
+   did not help"); the machinery stays because the disagreement statistic is useful
+   offline, and because option-order averaging runs through the same merge.
+6. **Calibration** (`reflex.train.calibrate`, "RLCD-lite"). Jev is trained with
    *Reinforcement Learning for Calibrated Decisions*: reward = a proper scoring rule on
    the emitted distribution. When the model's output *is* the distribution, the expected
    reward is differentiable in closed form, so RL collapses to supervised minimisation of
@@ -86,9 +123,66 @@ What it is **not** (yet): a dedicated classification head (we read out label tok
 choice cardinality is capped at 26), an MoE backbone, or a batching server that packs
 branches from *different* requests. See "Limits".
 
+What the trainer is **for**, today: steps 1–5 describe a frozen model, and that is what
+ships. Every LoRA mix trained here, and the distillation from a 27B teacher, bought
+accuracy on data shaped like their training data and lost general judgement on long,
+ambiguous inputs ([results/frozen-vs-trained.md](results/frozen-vs-trained.md),
+[results/lora-distill-qwen3.5-4b.md](results/lora-distill-qwen3.5-4b.md)). So
+`reflex-calibrate train` and `reflex-distill` are tools for fine-tuning on **your own
+workload's labels**, where in-distribution is the distribution you care about, not a step
+in the recommended setup. The post-hoc temperature is the part of the training stack that
+helps everyone.
+
+## What is served: the `stable` manifest
+
+`serving/stable.json` is the configuration reflex recommends, as data: the base model, an
+adapter (a hub id, or `null`), a calibration file, the prompt style, prompt-text overrides
+and `permutations`, plus the gate numbers it was selected on. The git tag `stable` points
+at the commit that file describes. `reflex-serve --stable` applies it and explicit flags
+still win; `reflex.serving.load_stable()` returns it to other entrypoints.
+
+Today that is the frozen `Qwen/Qwen3.5-4B`, no adapter, no calibration file, the default
+markdown prompt and `permutations: 2`. [SERVING.md](SERVING.md) has the release gate a run
+must pass before the tag moves.
+
+## Backends
+
+| backend | what runs the forward pass | when |
+|---|---|---|
+| `transformers`, strategy `packed` | this process, one sequence, 4D mask | attention-only backbones (Qwen3, Qwen3-VL) |
+| `transformers`, strategy `batched` | this process, right-padded batch over a batch-expanded state cache | hybrid backbones with recurrent layers (Qwen3.5) |
+| `sglang` | an SGLang server over HTTP | a deployment that already runs SGLang, and the 27B |
+
+The strategy is picked from the model config; `--device cuda|mps|cpu` chooses where the
+weights live, and Apple Silicon works through PyTorch MPS (`reflex.mps`).
+
+`--backend sglang --sglang-url ...` (`reflex.backends.sglang`) keeps the whole prompt and
+readout stack here and hands only the forward pass over: the prefix is sent once with
+`max_new_tokens=1` to warm SGLang's radix cache, then one `/generate` per branch fires
+concurrently with `return_logprob`, `logprob_start_len=-1` and `token_ids_logprob` set to
+that branch's label ids. Isolation between questions is structural, one request each,
+rather than a mask. The probabilities match the in-process engine to 0.004 at the median.
+Images, adapters, ensembles and `--device` need the weights here and are rejected rather
+than ignored. At 4B the in-process engine is about 2.2x faster; at 27B SGLang wins, and
+the NVFP4 checkpoint wins everything except calibration
+([results/sglang-backend.md](results/sglang-backend.md)).
+
+## Reasoning is an offline tool, not a mode
+
+`reflex.think` generates a bounded `<think>` block per branch and then reads the same
+label logits after it. Nothing on the request path imports it, and `reflex-serve` has no
+flag for it. It exists for two offline jobs: `reflex-distill label --think N`, where a
+thinking teacher labels a corpus, and `reflex-calibrate eval --think N`, which measures
+what reasoning would buy. A thinking readout costs 20–40 s per item and its p95 is
+nothing like its p50, which is why it is not a serving mode
+([VISION.md](VISION.md), [results/teachers-27b-and-4b-think.md](results/teachers-27b-and-4b-think.md)).
+An escalation cascade in front of it was built, measured and removed
+([results/escalation-trigger.md](results/escalation-trigger.md)).
+
 ## Quickstart
 
-Hardware: any CUDA GPU. Qwen3.5-4B in bf16 needs ~9 GB; Qwen3.5-0.8B / Qwen3-0.6B run anywhere.
+Hardware: any CUDA GPU, or an Apple Silicon GPU with `--device mps`. Qwen3.5-4B in bf16
+needs ~9 GB; Qwen3.5-0.8B / Qwen3-0.6B run anywhere.
 
 ```bash
 uv sync --extra dev
@@ -96,8 +190,12 @@ uv run pytest tests                       # mask unit tests + GPU equivalence te
 
 uv run python examples/support_ticket.py  # in-process demo, default Qwen/Qwen3.5-4B (see ../README.md for a gentler intro)
 uv run python examples/image_triage.py photo.jpg --caption "a tabby cat on grass"
-uv run reflex-serve --model Qwen/Qwen3.5-4B --port 8008
+uv run reflex-serve --stable --port 8008     # what serving/stable.json recommends
 uv run python examples/support_ticket.py --http
+
+uv run reflex-serve --model Qwen/Qwen3.5-4B --permutations 2 --port 8008   # the same, spelled out
+uv run reflex-serve --model Qwen/Qwen3.5-2B --device mps --dtype float16   # Apple Silicon
+uv run reflex-serve --backend sglang --sglang-url http://127.0.0.1:30000 --model Qwen/Qwen3.5-4B
 ```
 
 ```python
@@ -157,6 +255,11 @@ kernel compilation.
 
 ## Train for calibrated decisions (RLCD-lite)
 
+Nothing below is part of the recommended setup: the frozen model is what ships, and
+every adapter trained here was rejected on transfer
+([results/README.md](results/README.md)). This is the path for fine-tuning on your own
+workload's labels.
+
 ```bash
 uv run reflex-calibrate make-mmlu --out runs/mmlu_val.jsonl --split validation
 uv run reflex-calibrate make-mmlu --out runs/mmlu_dev.jsonl --split dev
@@ -175,6 +278,11 @@ shuffles option order as augmentation, which also attacks letter-position bias. 
 trains all weights instead of LoRA adapters.
 
 ## Browser version (`docs/`)
+
+**What it demonstrates.** The browser page runs Qwen3.5-0.8B, which is the mechanism, not
+the served quality: frozen below 4B the readout is not a usable judge (the 0.8B is near
+chance on every external set, [results/weight-classes.md](results/weight-classes.md)).
+Read it as a working model of the design you can watch run on your own GPU.
 
 `docs/index.html` + `docs/app.js` + `docs/reflex.js` (+ `docs/pr.js`, the PR triage
 port of `examples/pr_review.py`) run the same design on
@@ -207,8 +315,10 @@ fetched from the Hugging Face hub and cached by the browser.
 
 ## Request extensions
 
-* `permutations: N` (1–8): average a choice/score readout over N shuffled option orders.
-  Costs N branches per question; reduces position bias of the letter readout.
+* `permutations: N` (1–8): average the readout over N *distinct* option orders, yes/no
+  questions included. Costs N branches per question, all in the same pass; halves the
+  position bias of the letter readout. The server default is set by `--permutations` (2
+  under `--stable`), and the request wins when it sets the field.
 
 ## Limits
 
@@ -228,15 +338,31 @@ src/reflex/schema.py        request/response contract (pydantic)
 src/reflex/prompt.py        state prefix + question branch rendering, label tokens
 src/reflex/engine.py        packed / batched strategies, state cache, readout forward
 src/reflex/images.py        image refs in state -> placeholders + pixels
-src/reflex/readout.py       temperature, confidence, typed answers
-src/reflex/server.py        FastAPI  POST /v1/systemone
+src/reflex/readout.py       temperature, confidence, typed answers, order merging
+src/reflex/ensemble.py      prompt-variant branches, disagreement statistic
+src/reflex/serving.py       serving/stable.json -> Engine.load kwargs
+src/reflex/server.py        FastAPI  POST /v1/systemone, the CLI flags
+src/reflex/backends/        sglang.py: the same readout off an SGLang server
+src/reflex/mps.py           Apple Silicon helpers for --device mps
 src/reflex/client.py        tiny httpx client
+src/reflex/think.py         offline thinking readout (never reachable from the server)
+src/reflex/optimize_prompt.py  GEPA prompt-text search (rejected; prompts/gepa-v1.rejected.json)
+src/reflex/publish.py       upload an adapter + calibration + card to the Hub
 src/reflex/eval/            calibration metrics, MMLU experiment
 src/reflex/train/           JSONL data, LoRA proper-scoring-rule trainer
+src/reflex/distill/         corpus, questions, teacher labelling, mixing
+serving/stable.json         the recommended configuration, as data
+prompts/                    prompt-text overrides and ensemble variant sets
 examples/support_ticket.py  the canonical demo
 examples/image_triage.py    typed judgments about a photo
 tests/                      mask unit tests, GPU equivalence tests
 ```
+
+## Where the evidence is
+
+[results/README.md](results/README.md) indexes every experiment in this repo in order,
+with its verdict: what the readout work bought, why no adapter ships, why the serving
+path has one mode, and what each backend costs.
 
 ## References
 

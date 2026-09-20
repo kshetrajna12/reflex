@@ -9,6 +9,21 @@ This plan is based on the repository review on 2026-09-20: `main` at `21c95df` a
 `calibration` at `0109bc3`. The experiments below are proposed work. The recorded results
 are identified separately.
 
+**Status, 2026-09-20 (end of day).** Phase 1 is done and Phase 2's frozen-baseline track
+is done; the rest is open. Each phase below opens with a status line naming the results
+document that settles it. Nothing in the plan's content has been rewritten to match the
+outcomes, so where a phase's text and a result disagree, the result is newer.
+
+| phase | status | evidence |
+|---|---|---|
+| 1 — evaluation and serving agree | **done** | [order-averaging](results/order-averaging.md); the reasoning path was removed outright rather than reordered |
+| 2 — quality and headroom at every size | **frozen baselines done**, trained stage open | [weight-classes](results/weight-classes.md), [teachers-27b-and-4b-think](results/teachers-27b-and-4b-think.md) |
+| 3 — a shared, verified decision curriculum | **open**; the one pilot that exists is the distillation corpus | [lora-distill-qwen3.5-4b](results/lora-distill-qwen3.5-4b.md), [DATA_SOURCES.md](DATA_SOURCES.md) |
+| 4 — an adaptation recipe per weight class | **open**; every recipe tried at 4B was rejected | [frozen-vs-trained](results/frozen-vs-trained.md), the four `lora-mix*` records |
+| 5 — promote independently validated configurations | **open**; one manifest exists, per-class profiles do not | [../serving/stable.json](../serving/stable.json), [SERVING.md](SERVING.md) |
+
+Everything in one place, in order, with verdicts: [results/README.md](results/README.md).
+
 **Scope and comparison rules**
 
 Start with five dense Qwen tiers. These are initial candidates, not proven winners within
@@ -46,6 +61,12 @@ training labels without changing the student's inference weight class.
 The repository has substantial comparative evidence for 4B and 27B, but it does not yet
 establish the best configuration at every size.
 
+These are the numbers as recorded when the plan was written. Two have since moved,
+because the default readout now averages two distinct option orders: the frozen 4B is at
+91.7% / 68.5% and the 27B at 95.8% / 76.6%
+([results/order-averaging.md](results/order-averaging.md),
+[results/weight-classes.md](results/weight-classes.md)).
+
 | Recorded configuration | Public standard accuracy | Public hard accuracy |
 |---|---:|---:|
 | Frozen 4B, current default prompt | 91.7% | 65.8% |
@@ -71,6 +92,13 @@ They do not establish that fine-tuning cannot help other sizes or better trainin
 distributions. Keep a frozen baseline for every class throughout the program.
 
 **Phase 1 — Make evaluation and serving agree**
+
+> **Done.** All four findings are closed. Selective reasoning was resolved by removing
+> the cascade and the `reflex.escalate` module outright, so no request path reaches
+> `reflex.think` at all; the permutation finding produced `prompt.distinct_orders` and,
+> with it, the current `stable` configuration
+> ([results/order-averaging.md](results/order-averaging.md),
+> [results/escalation-trigger.md](results/escalation-trigger.md)).
 
 Resolve these findings from the reviewed `calibration` snapshot before ranking new
 configurations:
@@ -100,6 +128,14 @@ Deliverable: regression checks for the findings above and one reproducible evalu
 path that measures the behavior clients actually receive.
 
 **Phase 2 — Establish quality and headroom at every size**
+
+> **Frozen baselines done; the trained stage is open.** All five classes were measured at
+> one and two orders on the external sets and the public items
+> ([results/weight-classes.md](results/weight-classes.md)). The 9B question the plan
+> raises is answered: it is not a middle ground. The reasoning-reference stage ran at 4B
+> and 27B ([results/teachers-27b-and-4b-think.md](results/teachers-27b-and-4b-think.md)).
+> The 4B at two orders became `stable`; the 27B at two orders is the quality
+> configuration and is filed as a second benchmark entry.
 
 Build a configuration-driven runner across all five checkpoints. Give 9B early priority
 because the gap between the existing 4B and 27B measurements is currently unmeasured.
@@ -134,6 +170,13 @@ Deliverable: per-size baseline and headroom tables, including negative results a
 per-family changes. No adapter should be trained solely because the next size exists.
 
 **Phase 3 — Build a shared, verified decision curriculum**
+
+> **Open.** The only corpus built so far is the distillation set: 3.4k in-the-wild states
+> and 19k typed questions labelled by the 27B ([DISTILLATION.md](DISTILLATION.md)). It is
+> neither verified nor hard-shaped in the sense this phase means, and the student it
+> trained did not improve on the hard tier
+> ([results/lora-distill-qwen3.5-4b.md](results/lora-distill-qwen3.5-4b.md)). The catalogue
+> of candidate sources is [DATA_SOURCES.md](DATA_SOURCES.md).
 
 Create a reusable core dataset with additional slices targeting each student's measured
 weaknesses. Increase corpus size only after a pilot shows useful transfer.
@@ -172,6 +215,13 @@ and a fresh final test whose labels are not consulted during model selection.
 
 **Phase 4 — Find an adaptation recipe for each weight class**
 
+> **Open.** At 4B the answer so far is the documented frozen winner this phase allows for:
+> four LoRA mixes and one distillation were all rejected on transfer
+> ([results/frozen-vs-trained.md](results/frozen-vs-trained.md)). The hybrid-layer ablation
+> below has not been run. No pilot has been run at 0.8B, 2B, 9B or 27B, where
+> [results/weight-classes.md](results/weight-classes.md) says the small classes have the
+> most room.
+
 Start training pilots with 2B and 4B, where the comparison tests both a smaller student
 and the model with the most existing evidence. Then expand to 0.8B, 9B, and 27B using the
 measured headroom and failure families for each.
@@ -206,6 +256,12 @@ Deliverable: a winning recipe, or a documented frozen-model winner, for each cla
 inference track. Preserve losing runs as evidence for future decisions.
 
 **Phase 5 — Promote independently validated configurations**
+
+> **Open.** The release gate exists and is used ([SERVING.md](SERVING.md), "Releases"):
+> a configuration moves the `stable` tag only after beating the current one on the
+> never-trained external sets and on the public items. The per-class `serving/profiles/`
+> directory is still a proposal; [../serving/stable.json](../serving/stable.json) is the
+> single manifest that exists. No reserved final test has been drawn yet.
 
 Pre-register the primary metrics, practical improvement threshold, and acceptable
 regressions before candidate selection. Use paired comparisons with uncertainty estimates,
