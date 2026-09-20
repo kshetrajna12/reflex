@@ -124,3 +124,10 @@ Unlike the GEPA result, these gains appear on data the change was not selected o
 yes/no token readout carried a "say Yes" prior that the lettered pair removes, and the
 verification framing suits questions that ask whether a condition holds. The cost is one
 standard-tier item. Both changes are in the default prompt from this commit on.
+
+With the new default prompt, calibration fitted on our mix is *harmful* everywhere: the
+fitted noul temperature (4.0) over-softens yes/no questions that the lettered readout
+already answers honestly, external ECE rises on all four sets, and public hard-tier ECE
+goes from 0.086 (T = 1) to 0.135. The frozen model with this prompt and no calibration
+file is the configuration we stand behind for general use; fit a temperature only on
+your own workload's labels, and only if its raw ECE there says you need one.
