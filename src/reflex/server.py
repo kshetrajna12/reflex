@@ -8,6 +8,7 @@ Then any client written for Jev can point at http://localhost:8008 instead.
 from __future__ import annotations
 
 import argparse
+import gc
 import logging
 import os
 import time
@@ -16,6 +17,7 @@ import torch
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from reflex.mps import is_out_of_memory
 from reflex.schema import SystemOneRequest, SystemOneResponse
 
 log = logging.getLogger("reflex.server")
@@ -68,12 +70,26 @@ def create_app(engine, api_key: str | None = None) -> FastAPI:
     @app.post("/v1/systemone", response_model=SystemOneResponse)
     def systemone(req: SystemOneRequest):
         t0 = time.perf_counter()
+        out_of_memory = False
         try:
             resp = engine.answer(req)
         except ValueError as e:  # bad labels / too long
             raise HTTPException(status_code=422, detail=str(e))
         except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
+            out_of_memory = True
+        except RuntimeError as e:  # MPS has no OutOfMemoryError of its own
+            if not is_out_of_memory(e):
+                raise
+            out_of_memory = True
+        if out_of_memory:
+            # Free the memory out here, not inside the except block: there the traceback still
+            # holds the frames that own the tensors, so empty_cache() releases nothing and the
+            # next request fails too.
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            if torch.backends.mps.is_available():
+                torch.mps.empty_cache()
             raise HTTPException(status_code=529, detail="overloaded: request too large for GPU")
         ms = (time.perf_counter() - t0) * 1000
         log.info(
@@ -135,6 +151,7 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=8008)
     ap.add_argument("--max-pack-tokens", type=int, default=8192)
     ap.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float16", "float32"])
+    ap.add_argument("--device", default="cuda", choices=["cuda", "mps", "cpu"])
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 
@@ -166,6 +183,7 @@ def main(argv=None):
         }
     engine = Engine.load(
         dtype=getattr(torch, args.dtype),
+        device=args.device,
         max_pack_tokens=args.max_pack_tokens,
         ensemble=args.ensemble,
         **kw,

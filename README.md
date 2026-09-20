@@ -131,6 +131,23 @@ curl -s localhost:8008/v1/systemone -H 'content-type: application/json' -d '{
 The request and response shapes are the same as TypeSafe's hosted API, so client code
 written for Jev can point at `http://localhost:8008` instead.
 
+### On a Mac (Apple Silicon)
+
+The server also runs on the Mac GPU through PyTorch MPS. Install without the CUDA wheel index,
+then pick the device:
+
+```bash
+uv sync --no-sources                      # plain PyPI torch, which includes MPS
+uv run --no-sync reflex-serve --model Qwen/Qwen3.5-2B --device mps --dtype float16
+```
+
+Use `--no-sync` afterwards, or `uv run` re-resolves torch against the CUDA index. `float16`
+rather than `bfloat16`. Measured on an M3 Pro (18 GB): Qwen3.5-0.8B answers the request above
+in about 130 ms and Qwen3.5-2B a 200-token state with two questions in about 500 ms. Pick a model
+whose weights fit in roughly half of unified memory: MPS memory is capped so that a model that
+is too large fails with an out-of-memory error instead of swapping the machine to a halt
+(Qwen3.5-4B in float16 does not fit in 18 GB).
+
 ## Make the percentages honest (calibration)
 
 Out of the box the numbers are *roughly* right. To make them trustworthy for

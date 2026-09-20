@@ -29,6 +29,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import logging
+import os
 import threading
 import time
 from collections import OrderedDict
@@ -268,6 +269,15 @@ class Engine:
             AutoTokenizer,
         )
 
+        if str(device).startswith("mps"):
+            # transformers' threaded weight loader copies to the device from 4 threads at
+            # once, which hangs or segfaults on MPS. Load serially there.
+            os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
+            # Cap MPS memory so an oversized model raises out-of-memory instead of swapping the
+            # machine to a halt, without fighting a watermark the user already set.
+            from reflex.mps import memory_watermarks
+
+            os.environ.update(memory_watermarks(os.environ))
         tok = AutoTokenizer.from_pretrained(model_id)
         cfg = AutoConfig.from_pretrained(model_id)
         multimodal = getattr(cfg, "vision_config", None) is not None
@@ -279,6 +289,10 @@ class Engine:
         model = loader.from_pretrained(
             model_id, dtype=dtype, device_map=device, attn_implementation=attn_implementation
         )
+        if next(model.parameters()).device.type == "mps":
+            from reflex.mps import patch_delta_rule
+
+            patch_delta_rule(model)
         if adapter_path:
             from peft import PeftModel
 
