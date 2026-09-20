@@ -125,6 +125,13 @@ def main(argv=None):
         help="take adapter/calibration/prompt defaults from serving/stable.json "
         "(the configuration the `stable` git tag recommends); explicit flags still win",
     )
+    ap.add_argument(
+        "--think",
+        type=int,
+        default=0,
+        help="System Two readout: reasoning tokens per branch before the logits are read "
+        "(slow; for offline teachers and experiments, not serving)",
+    )
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8008)
     ap.add_argument("--max-pack-tokens", type=int, default=8192)
@@ -161,6 +168,7 @@ def main(argv=None):
     engine = Engine.load(
         dtype=getattr(torch, args.dtype),
         max_pack_tokens=args.max_pack_tokens,
+        think_tokens=args.think,
         **kw,
     )
     if args.served_name:

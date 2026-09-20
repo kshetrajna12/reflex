@@ -207,6 +207,7 @@ class Engine:
         calibration: Calibration | None = None,
         *,
         max_pack_tokens: int = 8192,
+        think_tokens: int = 0,
         max_branch_tokens: int = 4096,
         state_cache_entries: int = 8,
         model_name: str = "reflex-latest",
@@ -229,6 +230,9 @@ class Engine:
             size["longest_edge"] = max_image_pixels
             processor.image_processor.size = size
         self.default_permutations = default_permutations
+        # >0: System Two readout (reflex.think): generate up to this many reasoning tokens
+        # per branch before reading the label logits. Offline teachers only.
+        self.think_tokens = think_tokens
         self.strategy = strategy or ("batched" if self.is_hybrid else "packed")
         if self.strategy not in ("packed", "batched"):
             raise ValueError(f"unknown strategy {self.strategy!r}")
@@ -518,11 +522,17 @@ class Engine:
         branch_ids = [self._encode(b.text) for b in branches]
 
         entry, hit = self.encode_state(req.state)
-        logits = self._forward_branches(entry, branch_ids)  # [B, vocab]
-
         per_q: dict[str, list[tuple[Branch, np.ndarray]]] = {}
-        for b, row in zip(branches, logits):
-            per_q.setdefault(b.qid, []).append((b, self.restrict(row, b).cpu().numpy()))
+        if self.think_tokens:
+            from reflex.think import think_logits
+
+            rows = think_logits(self, [(req.state, b) for b in branches], self.think_tokens)
+            for b, row in zip(branches, rows):
+                per_q.setdefault(b.qid, []).append((b, row))
+        else:
+            logits = self._forward_branches(entry, branch_ids)  # [B, vocab]
+            for b, row in zip(branches, logits):
+                per_q.setdefault(b.qid, []).append((b, self.restrict(row, b).cpu().numpy()))
 
         answers = {}
         for qid, q in req.questions.items():
@@ -601,6 +611,10 @@ class Engine:
     @torch.inference_mode()
     def label_logits_batch(self, items: Sequence[tuple[Any, Branch]]) -> list[np.ndarray]:
         """Restricted last-token logits (fp32 numpy) for many independent (state, branch) pairs."""
+        if self.think_tokens:
+            from reflex.think import think_logits
+
+            return think_logits(self, items, self.think_tokens)
         results: list[np.ndarray | None] = [None] * len(items)
         for idx, batch in self.iter_batches(items):
             logits = self.forward_batch(batch).float()

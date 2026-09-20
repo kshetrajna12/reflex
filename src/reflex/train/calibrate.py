@@ -322,6 +322,7 @@ def evaluate_adapter(args):
         max_pack_tokens=args.max_pack_tokens,
         prompt_style=args.prompt_style,
         prompt_texts=args.prompt_texts,
+        think_tokens=args.think,
     )
     exs = examples(args.val, engine.fmt)
     reports, logits, labels = evaluate(engine, exs)
@@ -383,6 +384,12 @@ def main(argv=None):
         help="re-fit the calibration (temperatures + head) for an adapter on a labelled set",
     )
     ev.add_argument("--prompt-texts", default=None, help="prompt.json from reflex-optimize")
+    ev.add_argument(
+        "--think",
+        type=int,
+        default=0,
+        help="System Two readout: reasoning tokens per branch (0 = off)",
+    )
     r.add_argument("--model", default="Qwen/Qwen3.5-4B")
     r.add_argument(
         "--adapter", default=None, help="adapter dir or hub id; omit to calibrate the base model"

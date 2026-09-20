@@ -65,6 +65,7 @@ def cmd_label(a):
         max_pack_tokens=a.max_pack_tokens,
         prompt_style=a.prompt_style,
         prompt_texts=a.prompt_texts,
+        think_tokens=a.think,
     )
     rows = list(read_jsonl(a.inp))
     if a.limit:
@@ -198,6 +199,9 @@ def main(argv=None):
     lab.add_argument("--max-pack-tokens", type=int, default=4096)
     lab.add_argument("--prompt-style", default="markdown")
     lab.add_argument("--prompt-texts", default=None)
+    lab.add_argument(
+        "--think", type=int, default=0, help="System Two teacher: reasoning tokens per branch"
+    )
     lab.add_argument("--limit", type=int, default=0)
     lab.add_argument("--resume", action="store_true")
     lab.add_argument("--log-every", type=int, default=100)
