@@ -1,5 +1,9 @@
 # LoRA on the broader mix (mix2), Qwen3.5-4B
 
+> **Status: rejected on transfer.** In-distribution numbers; see
+> [frozen-vs-trained.md](frozen-vs-trained.md) for what happened off-distribution. Not
+> published, not served.
+
 Second training run. Same recipe as the first, plus four new sources aimed at
 instruction adequacy, rule-based routing, reading probabilities off stated base rates,
 and rater disagreement (HelpSteer2 per-rater scores as soft labels); two epochs;

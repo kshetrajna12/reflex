@@ -1,5 +1,10 @@
 # LoRA on the public mix, Qwen3.5-4B
 
+> **Status: rejected on transfer.** The gains below are in-distribution. The control that
+> followed showed the frozen model is the better judge on the hard tier and on held-out
+> external data ([frozen-vs-trained.md](frozen-vs-trained.md)). Kept as a record, and as
+> the recipe to copy if you are training on your own workload's labels.
+
 Command:
 
     reflex-data mix --out runs/mix_train.jsonl --eval-out runs/mix_eval.jsonl --per-source 800

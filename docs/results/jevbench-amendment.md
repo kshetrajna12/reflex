@@ -1,5 +1,10 @@
 # Amendment posted on fstandhartinger/jevbench issue #3 (2026-09-19)
 
+> **Status.** Still the pending entry in issue #3, but its numbers are the single-order
+> ones. The configuration filed today reads two distinct option orders (hard 0.685):
+> [order-averaging.md](order-averaging.md), and the 27B entry is
+> [jevbench-request-27b.md](jevbench-request-27b.md).
+
 Update to this request: please evaluate the **frozen base model with reflex's default
 prompt and no adapter** instead of the LoRA adapter named above. Our controls since
 filing showed the adapter traded accuracy on long, ambiguous items for accuracy on items

@@ -1,5 +1,11 @@
 # An SGLang backend for the readout (spike, 2026-09-20)
 
+> **Status.** The backend is current (`--backend sglang`, [../SERVING.md](../SERVING.md)).
+> One thing in the recipe has rotted: the nightly image these numbers were measured on,
+> `lmsysorg/sglang:nightly-dev-cu13-20260813-273d978b`, has been removed from Docker Hub.
+> Pin an image by digest and keep your own copy; re-measure latency and calibration on
+> whatever engine version you land on.
+
 Question: can a production inference engine serve reflex's readout instead of its own
 transformers engine, and does anything change if it does?
 

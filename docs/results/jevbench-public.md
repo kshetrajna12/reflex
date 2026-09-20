@@ -1,5 +1,10 @@
 # reflex on JevBench v1.2 (public items only, unofficial self-run; official run requested 2026-09-19)
 
+> **Status.** A record of the 2026-09-19 run. The served configuration has since moved to
+> the frozen model reading two distinct option orders (hard 0.685, hard ECE 0.081):
+> [order-averaging.md](order-averaging.md) and [weight-classes.md](weight-classes.md) have
+> the current numbers, [README.md](README.md) the whole sequence.
+
 [JevBench](https://github.com/fstandhartinger/jevbench) is Benchmark Heaven's benchmark for
 Jev-class decision models. Its `typesafe` adapter speaks the same `/v1/systemone` wire
 format reflex implements, so the harness runs against a reflex server unchanged. This is

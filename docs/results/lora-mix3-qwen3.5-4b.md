@@ -1,5 +1,10 @@
 # LoRA mix3, Qwen3.5-4B (the adapter published on the Hub)
 
+> **Status: superseded.** This is the adapter published as
+> `kshetrajna12/reflex-qwen3.5-4b-lora`; its model card says it is superseded. The served
+> configuration is the frozen model ([frozen-vs-trained.md](frozen-vs-trained.md),
+> [order-averaging.md](order-averaging.md)).
+
 Third run: the first run's recipe (attention-only LoRA r=16, one epoch) plus the four
 targeted sources at about a third of their mix2 weight. 7,850 training examples,
 2,082 held-out; gradient checkpointing with 2,048-token batches (peak 18 GB); 43 minutes

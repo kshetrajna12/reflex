@@ -1,5 +1,9 @@
 # Bench request filed on fstandhartinger/jevbench (2026-09-19)
 
+> **Historical.** This filing named the mix3 LoRA adapter. It was amended the next day to
+> the frozen model ([jevbench-amendment.md](jevbench-amendment.md)) and the entry now reads
+> two option orders. The adapter is superseded.
+
 Title: [bench request]: Add reflex (kshetrajna12/reflex-qwen3.5-4b-lora, TypeSafe wire format)
 
 Request to add [reflex](https://github.com/kshetrajna12/reflex) (Qwen3.5-4B + a LoRA adapter,

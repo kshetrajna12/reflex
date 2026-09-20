@@ -158,6 +158,11 @@ the gains elsewhere. That is the same conclusion the disagreement gate reached i
 
 ## Verdict
 
+> **What happened next.** The cascade was removed the same day, and with it
+> `reflex.escalate`: the serving path has one readout and no slow path for a gate to open
+> ([../VISION.md](../VISION.md)). The verdict below is kept as it was written, about a
+> configuration that no longer exists in the code.
+
 * **Ship the trigger as the gate.** It dominates the disagreement threshold on both splits
   at every budget, and on the public items it is the best of the three configurations on
   hard-tier ECE (0.061, against 0.081 frozen and 0.082 by disagreement) and on the
