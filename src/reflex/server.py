@@ -108,6 +108,47 @@ def create_app(engine, api_key: str | None = None) -> FastAPI:
     return app
 
 
+def _sglang_backend(args):
+    """`--backend sglang`: the same prompt and readout, computed by an SGLang server.
+
+    Only the flags that survive the move are honoured. Anything that needs the weights in
+    this process (an adapter, prompt ensembles) is rejected here rather than quietly
+    ignored.
+    """
+    from transformers import AutoTokenizer
+
+    from reflex.backends.sglang import SGLangBackend
+    from reflex.engine import _load_texts
+    from reflex.prompt import PromptFormat
+    from reflex.readout import Calibration
+
+    for flag, value in (
+        ("--adapter", args.adapter),
+        ("--ensemble", args.ensemble),
+    ):
+        if value:
+            raise SystemExit(f"{flag} is not supported by --backend sglang")
+
+    tok = AutoTokenizer.from_pretrained(args.model)
+    template = tok.chat_template or ""
+    fmt = PromptFormat(
+        chat=bool(template),
+        no_think="enable_thinking" in template,
+        style=args.prompt_style,
+        texts=_load_texts(args.prompt_texts),
+    )
+    backend = SGLangBackend(
+        args.sglang_url,
+        tokenizer=tok,
+        fmt=fmt,
+        calibration=Calibration.load(args.calibration),
+        model_name=args.served_name or args.model,
+        default_permutations=args.permutations,
+    )
+    log.info("sglang backend: %s serving %s", args.sglang_url, backend.model_name)
+    return backend
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3.5-4B")
@@ -147,6 +188,18 @@ def main(argv=None):
     ap.add_argument(
         "--ensemble", default=None, help="prompt-ensemble variants json (reflex.ensemble)"
     )
+    ap.add_argument(
+        "--backend",
+        default="transformers",
+        choices=["transformers", "sglang"],
+        help="transformers: load the model in this process (the default). sglang: read the "
+        "same label logits off an SGLang server over HTTP (reflex.backends.sglang)",
+    )
+    ap.add_argument(
+        "--sglang-url",
+        default="http://127.0.0.1:30000",
+        help="where the SGLang server listens, for --backend sglang",
+    )
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8008)
     ap.add_argument("--max-pack-tokens", type=int, default=8192)
@@ -158,6 +211,16 @@ def main(argv=None):
     import uvicorn
 
     from reflex.engine import Engine
+
+    if args.backend == "sglang":
+        engine = _sglang_backend(args)
+        uvicorn.run(
+            create_app(engine, api_key=args.api_key),
+            host=args.host,
+            port=args.port,
+            log_level="warning",
+        )
+        return
 
     if args.stable:
         from reflex.serving import engine_kwargs, load_stable
