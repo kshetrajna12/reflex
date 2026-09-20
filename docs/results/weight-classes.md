@@ -34,7 +34,24 @@ What the table says:
 * **Two orders help every size**, most of all the small ones, and mainly through calibration
   at 4B and above.
 
-## Public benchmark items
+## Public benchmark items (one request per item, T = 1)
 
-*(pending: 0.8B, 2B, 9B at one and two orders; 4B and 27B are in
-[order-averaging.md](order-averaging.md))*
+| model | orders | easy | standard | hard | hard ECE | prob. fidelity | calibration axis | hard p50 |
+|---|---|---|---|---|---|---|---|---|
+| 0.8B | 1 | 0.958 | 0.528 | 0.342 | 0.362 | 0.559 | 41.8 | 0.06 s |
+| 0.8B | 2 | 0.979 | 0.597 | 0.378 | 0.184 | 0.698 | 66.4 | 0.06 s |
+| 2B | 1 | 1.000 | 0.653 | 0.405 | 0.269 | 0.615 | 53.9 | 0.09 s |
+| 2B | 2 | 1.000 | 0.639 | 0.468 | 0.146 | 0.705 | 70.6 | 0.09 s |
+| 4B (stable) | 1 | 1.000 | 0.917 | 0.658 | 0.086 | 0.708 | 76.8 | 0.18 s |
+| 4B (stable) | 2 | 1.000 | 0.917 | 0.685 | 0.081 | 0.740 | 78.9 | 0.19 s |
+| 9B | 1 | *(pending)* | | | | | | |
+| 9B | 2 | *(pending)* | | | | | | |
+| 27B | 1 | 1.000 | 0.917 | 0.703 | 0.088 | 0.831 | 82.7 | 0.88 s |
+| 27B | 2 | 1.000 | 0.958 | 0.766 | 0.061 | 0.827 | 85.2 | 0.96 s |
+| Jev (official) | | 1.000 | 0.986 | 0.730 | 0.031 | | | |
+
+The hard tier separates the classes cleanly: 0.34, 0.41, 0.66, 0.70 by size at one order.
+Two orders lift every class, and lift calibration most where it was worst (the 0.8B's
+calibration axis goes from 42 to 66 without a single correct answer added on the standard
+tier). Latency scales with weight size as expected: the 2B answers a hard item in 90 ms, the
+27B in about a second.
