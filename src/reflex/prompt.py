@@ -4,10 +4,10 @@ Layout of one request (ChatML, which Qwen instruct models are trained on):
 
     prefix  = <|im_start|>system ... <|im_end|>
               <|im_start|>user
-              # State
+              # Evidence
               <state>
 
-    branch_i = # Question
+    branch_i = # Criterion
                <instructions>
                # Options
                A. ...
@@ -73,8 +73,8 @@ class Branch:
 # optimiser (reflex-optimize, GEPA) edits these; nothing else about the layout changes.
 DEFAULT_TEXTS = {
     "system_prompt": SYSTEM_PROMPT,
-    "state_heading": "# State",
-    "question_heading": "# Question",
+    "state_heading": "# Evidence",
+    "question_heading": "# Criterion",
     "options_heading": "# Options",
     "noul_ask": "Respond with only Yes or No.",
     "choice_ask": "Respond with only the letter of the best option.",
@@ -83,7 +83,7 @@ DEFAULT_TEXTS = {
     "noul_false_default": "The statement is false.",
     "score_level_prefix": "(level {i} of {n})",
     # "yesno" reads the Yes/No tokens; "letters" presents yes/no as a lettered pair (A/B)
-    "noul_readout": "yesno",
+    "noul_readout": "letters",
 }
 
 COMPACT_SYSTEM_PROMPT = (
