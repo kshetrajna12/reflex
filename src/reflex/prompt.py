@@ -19,7 +19,7 @@ Layout of one request (ChatML, which Qwen instruct models are trained on):
 The prefix is tokenized *once* and the branches are tokenized separately, so the
 prefix token ids are byte-identical across branches and can be cached / shared.
 The model never generates: we read next-token logits at the end of each branch and
-restrict them to the label tokens (A/B/C…, Yes/No).
+restrict them to the label tokens (A/B/C…; or Yes/No with the "yesno" readout).
 """
 
 from __future__ import annotations
@@ -98,7 +98,9 @@ class PromptFormat:
     """How to wrap text for a given model family.
 
     `style` selects the prompt layout:
-      * "markdown": headed sections (# State / # Question / # Options), Yes/No tokens for noul
+      * "markdown": headed sections (# Evidence / # Criterion / # Options); noul is read as a
+                    lettered yes/no pair by default (`noul_readout: letters`; "yesno" reads
+                    the Yes/No tokens instead)
       * "compact":  one JSON object {state, question, options:[{letter, text}]} with a short
                     instruction, and every primitive (noul included) read out as a letter.
                     Compact JSON keeps the model's attention on the content and avoids the
