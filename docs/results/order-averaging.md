@@ -64,6 +64,10 @@ confirmation is recorded below when available.
 * **A letters-only two-wording ensemble** (`ensemble-v2.json`, corrected orders): 4B hard
   0.667 / ECE 0.080, calibration axis 79.2. Same calibration as orders alone, two items
   lower, standard-tier ECE worse. Wordings add nothing beyond a disagreement signal.
+* **The letters-only wording pair on the 27B** (× two orders): external sets unchanged
+  (0.937 / 0.860 / 0.810 / 0.680); public standard 0.972 but hard 0.748 with ECE 0.095 and
+  calibration axis 81.3, against 0.766 / 0.061 / 85.2 for two orders alone. Wordings do not
+  close the 27B's calibration gap either.
 * **Reasoning on every branch of a wording ensemble**: perfect standard tier (72/72) but 25
   to 120 s per item; the hard tier timed out on 58 of 111 items. Not a serving mode.
 
