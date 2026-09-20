@@ -20,8 +20,41 @@ question   how urgent (0-2)?  ->  1.9   (low 4%  medium 1%  high 95%)
 question   refund requested?  ->  yes 2%
 ```
 
-That whole answer comes back in about 100 ms once the state is cached. Your code then
-decides what to do with the numbers ("auto-route if above 90 %, otherwise ask a human").
+That whole answer comes back in about 200 ms, and faster once the state is cached. Your
+code then decides what to do with the numbers ("auto-route if above 90 %, otherwise ask a
+human").
+
+## Status
+
+**What it is.** One HTTP endpoint, `POST /v1/systemone`, answered by a single forward
+pass over a frozen open-weights model. No decoding, no reasoning, no escalation: about
+200 ms, and the slowest request is a small multiple of the fastest.
+
+**Where it stands.** On the public items of JevBench, against Jev itself:
+
+| | easy | standard | hard | hard ECE | latency |
+|---|---|---|---|---|---|
+| reflex, frozen Qwen3.5-4B, two orders (`stable`) | 1.000 | 0.917 | 0.685 | 0.081 | ~200 ms |
+| reflex, frozen Qwen3.8-27B, two orders | 1.000 | 0.958 | 0.766 | 0.061 | ~1 s |
+| Jev 1.13.0 (official) | 1.000 | 0.986 | 0.730 | 0.031 | |
+
+Ours are self-run numbers on a suite we have consulted throughout development, so treat
+them as development numbers, not an independent test. Both configurations are filed on
+JevBench and queued by its author (issues
+[#3](https://github.com/fstandhartinger/jevbench/issues/3) and
+[#5](https://github.com/fstandhartinger/jevbench/issues/5)).
+
+**What is proven not to help.** Fine-tuning, in every form we tried. Four LoRA mixes on
+public datasets and a distillation from a 27B teacher all won on data shaped like their
+training data and lost general judgement on long, ambiguous inputs. GEPA prompt
+optimisation did the same in miniature. Wording ensembles, more than two option orders,
+and a reasoning cascade behind a fitted escalation trigger were all measured and none of
+them ships. What did help was the readout: a lettered yes/no answer, Evidence / Criterion
+framing, and averaging two distinct option orders. Every run, with its verdict, is indexed
+in [docs/results/README.md](docs/results/README.md).
+
+**How to run it.** `git checkout stable && uv run reflex-serve --stable` on any 16 GB
+CUDA GPU. The five-minute version is below.
 
 ## Try it in your browser first
 
@@ -29,8 +62,10 @@ decides what to do with the numbers ("auto-route if above 90 %, otherwise ask a 
 WebGPU (Chrome, Edge, or Safari 18+) with a 650 MB Qwen3.5-0.8B model. Pick a preset,
 load the model once, drop in a photo, press Run. Nothing is uploaded anywhere. It is the
 same request format and the same readout as the Python version below, just smaller and
-less calibrated. The page lives in [`docs/`](docs/): `reflex.js` is the inference module,
-`app.js` the UI.
+less calibrated. Read it as a demonstration of the mechanism rather than of the served
+quality: a frozen 0.8B is not a usable judge, and the model that ships is the 4B
+([docs/results/weight-classes.md](docs/results/weight-classes.md)). The page lives in
+[`docs/`](docs/): `reflex.js` is the inference module, `app.js` the UI.
 
 ## Why would I want this?
 
@@ -53,9 +88,15 @@ model), Python 3.12, and [uv](https://docs.astral.sh/uv/).
 ```bash
 git clone https://github.com/kshetrajna12/reflex
 cd reflex
+git checkout stable                       # the commit and configuration we recommend
 uv sync                                   # installs PyTorch (CUDA 13), transformers, etc.
 uv run python examples/support_ticket.py  # downloads Qwen3.5-4B (~8 GB) the first time
 ```
+
+`stable` is a git tag that moves with the configuration, and
+[`serving/stable.json`](serving/stable.json) at that commit says what it is: today the
+frozen Qwen3.5-4B, the default prompt, no adapter, no calibration file, every question
+read in two option orders. Stay on `main` if you would rather follow the experiments.
 
 You should see the ticket example above printed as JSON, plus timings. The very first
 call takes ~20 seconds while GPU kernels compile; after that it is fast.
@@ -97,6 +138,14 @@ print(resp.answers["angry"].noul)          # probability of "yes"
 print(resp.answers["urgency"].score)       # 0.0 .. 2.0, probability-weighted
 ```
 
+`Engine.load` takes the flags the server takes. To get exactly what the server serves,
+including the two option orders, load the manifest:
+
+```python
+from reflex.serving import engine_kwargs, load_stable
+engine = Engine.load(**engine_kwargs(load_stable()))   # or Engine.load(..., default_permutations=2)
+```
+
 ### The three question types
 
 | type | asks | you get back |
@@ -114,7 +163,7 @@ print(resp.answers["urgency"].score)       # 0.0 .. 2.0, probability-weighted
 ### Run it as a server
 
 ```bash
-uv run reflex-serve --model Qwen/Qwen3.5-4B --port 8008
+uv run reflex-serve --stable --port 8008
 ```
 
 ```bash
@@ -130,6 +179,24 @@ curl -s localhost:8008/v1/systemone -H 'content-type: application/json' -d '{
 
 The request and response shapes are the same as TypeSafe's hosted API, so client code
 written for Jev can point at `http://localhost:8008` instead.
+
+`--stable` reads the recommended settings from `serving/stable.json`; spell them out with
+`--model` and `--permutations` if you prefer. `--api-key` (or `REFLEX_API_KEY`) puts a
+bearer key in front of `/v1/*`, which you want on anything reachable from the internet.
+
+If your GPU is already running [SGLang](https://github.com/sgl-project/sglang), reflex can
+read the same label logits off it instead of loading the weights itself:
+
+```bash
+uv run reflex-serve --backend sglang --sglang-url http://127.0.0.1:30000 \
+    --model Qwen/Qwen3.5-4B --permutations 2 --port 8008
+```
+
+Same wire format, same answers (the two backends' probabilities differ by 0.004 at the
+median). At 4B the in-process engine is faster, so this is for deployments that already
+run SGLang and for the 27B, where it is the better way to serve.
+[docs/SERVING.md](docs/SERVING.md) has the launch recipe and the caveats;
+[docs/results/sglang-backend.md](docs/results/sglang-backend.md) has the numbers.
 
 ### On a Mac (Apple Silicon)
 
@@ -166,7 +233,21 @@ What we measured (lower ECE = more honest; Jev reports 0.031):
 | Qwen3.5-4B | 72 % | 0.090 | **0.039** |
 | Qwen3-8B | 71 % | 0.264 | 0.061 |
 
-## Fine-tune it to be honest (and better) on real tasks
+The `stable` configuration ships **no** calibration file, because a temperature fitted on
+one distribution does not transfer to another, and reading each question in two option
+orders already cuts the calibration error on never-trained external sets roughly in half
+for free ([docs/results/order-averaging.md](docs/results/order-averaging.md)). Fit a
+temperature on data from your own workload, and refit it whenever the model, the prompt or
+the precision changes.
+
+## Fine-tune it on your own tasks
+
+> Read this as a tool, not a recommendation. Every adapter trained in this repo was
+> rejected: each one won on data shaped like its training mix and lost general judgement
+> on long, ambiguous inputs, so the served configuration is the frozen model
+> ([docs/results/frozen-vs-trained.md](docs/results/frozen-vs-trained.md)). Where it does
+> pay is the case below: **your own workload's labels**, where the data you train on is
+> the data you will see. The numbers in this section are in-distribution numbers.
 
 Temperature fixes over-confidence but cannot make the model *better* at a task. For that
 you train it, and the recipe is simple: show it labelled examples and penalise it with a
@@ -212,6 +293,11 @@ after, so you can see exactly what the training bought. Your own data plugs in t
 way; `src/reflex/train/recipes.py` shows how each public dataset was mapped onto a
 primitive, which is the part to copy.
 
+If you have the inputs but not the labels, `reflex-distill` is the other route: a stronger
+model answers your own states through the same prompt, and its distributions become the
+targets ([docs/DISTILLATION.md](docs/DISTILLATION.md)). That teacher may reason
+(`reflex-distill label --think N`); the student it trains never does.
+
 ## Example: triaging a pull request
 
 `examples/pr_review.py` is a small AI PR-review triage built on this: a PR-level state
@@ -248,10 +334,17 @@ model on your GPU. Expect a rougher ordering than the 4B; it is the same questio
 On the public items of [JevBench](https://github.com/fstandhartinger/jevbench), a
 benchmark for Jev-class decision models, the **frozen** Qwen3.5-4B with reflex's default
 prompt, reading each question in two option orders, scores 1.000 / 0.917 / 0.685 on the
-easy / standard / hard tiers, against
-1.000 / 0.986 / 0.730 for Jev itself and 1.000 / 0.986 / 0.613 for the strongest other
-open 4B rebuild, on the same items, with hard-tier calibration error 0.081 and no
-calibration file. That is our own run; an official run has been requested.
+easy / standard / hard tiers, with hard-tier calibration error 0.081 and no calibration
+file. Jev itself scores 1.000 / 0.986 / 0.730 at ECE 0.031, and the strongest other open
+4B rebuild 1.000 / 0.986 / 0.613, on the same items. If you have a 60 GB GPU, the same
+code on the frozen Qwen3.8-27B reaches 0.958 / 0.766 at ECE 0.061, in about a second per
+request ([docs/results/weight-classes.md](docs/results/weight-classes.md)).
+
+Those are our own runs. The public items have been consulted throughout development, so
+they are a development suite rather than an independent test; both configurations are
+filed on JevBench and queued by its author (issues
+[#3](https://github.com/fstandhartinger/jevbench/issues/3) and
+[#5](https://github.com/fstandhartinger/jevbench/issues/5)).
 
 Fine-tuning turned out to be a trap for general use: the adapters trained here improved
 data that looked like their training data and cost accuracy on long, ambiguous inputs,
@@ -260,15 +353,22 @@ and the two prompt changes that *did* transfer are in
 [docs/results/frozen-vs-trained.md](docs/results/frozen-vs-trained.md); the public-item
 comparison is in [docs/results/jevbench-public.md](docs/results/jevbench-public.md).
 
+**Every experiment, in order, with its verdict:
+[docs/results/README.md](docs/results/README.md).** That index is the honest version of
+this section: what was tried, what won, and what was thrown away.
+
 ## How it works, in one paragraph
 
 The state is run through the model once and its internal cache is kept. Every question is
 then run as a separate branch that can see the state but not the other questions, all in
 the same forward pass. Instead of letting the model write an answer, we look at what it
-*would* say next, keep only the answer labels (A/B/C or Yes/No), and turn those scores
-into percentages. A single "temperature" number, fitted on labelled data, makes the
-percentages honest. There is no decoding loop and no reasoning anywhere on that path:
-one request is one forward pass, which is what keeps it under 300 ms. The details, the
+*would* say next, keep only the answer labels (A, B, C …, and a lettered pair for
+yes/no), and turn those scores into percentages. Each question is asked twice inside that
+same pass, with its options in two different orders, and the two readings are averaged,
+which is the cheapest accuracy and honesty we found. A single "temperature" number,
+fitted on labelled data, can make the percentages honest on your own data. There is no
+decoding loop, no reasoning and no escalation anywhere on that path: one request is one
+forward pass, which is what keeps it under 300 ms. The details, the
 design trade-offs, and the mapping to the Jev write-ups are in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); why the fast pass is the whole product is
 in [docs/VISION.md](docs/VISION.md).
@@ -281,6 +381,8 @@ in [docs/VISION.md](docs/VISION.md).
   re-reads the state for every question and does not cache it between requests, so it
   is fine for a handful of questions, not hundreds.
 - A `choice` question can have up to 26 options; `score` can have 2 to 10 levels.
+- `--device mps` runs the server on an Apple Silicon GPU, `--backend sglang` on an SGLang
+  server; `--permutations N` sets how many option orders each question is read in.
 - The model is not magic: check its answers on a handful of your own examples before
   trusting it, and use the confidence numbers to route uncertain cases to a person.
 - `reflex.think` lets a model reason before the labels are read. It is an offline tool
