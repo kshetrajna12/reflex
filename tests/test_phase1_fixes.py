@@ -64,6 +64,7 @@ class _Fake:
         self.cal = Calibration()
         self.think_tokens = 64
         self.think_if_disagree = think_if_disagree
+        self.escalator = None
         self.model_name = "fake"
         self.logits_for = logits_for
         self.fast_calls = 0
@@ -80,6 +81,8 @@ class _Fake:
 
     def restrict(self, row, br):
         return torch.tensor(self.logits_for(br))
+
+    _escalate = Engine._escalate
 
 
 def _run(monkeypatch, think_if_disagree, agree):

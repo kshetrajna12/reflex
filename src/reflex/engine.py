@@ -225,6 +225,10 @@ class Engine:
         # System Two on demand: when the ensemble's wordings disagree by more than this,
         # the question is re-answered with the thinking readout (think_tokens must be > 0)
         self.think_if_disagree: float | None = None
+        # reflex.escalate.Escalator: a fitted "the fast path is probably wrong here" score.
+        # When set (with think_tokens > 0) it decides escalation instead of the threshold
+        # above, because scatter alone misses the confident-and-wrong reasoning items.
+        self.escalator: Any | None = None
         self.cal = calibration or Calibration()
         self.max_pack_tokens = max_pack_tokens
         self.max_branch_tokens = max_branch_tokens
@@ -524,6 +528,20 @@ class Engine:
         with self._lock:
             return self._answer(req)
 
+    def _escalate(self, qid: str, q, state, key_probs: dict, state_tokens: int) -> bool:
+        """Does this question go to the slow path? The fitted trigger when there is one,
+        otherwise the plain disagreement threshold."""
+        dis = self.last_disagreement.get(qid, 0.0)
+        if self.escalator is None:
+            return self.think_if_disagree is not None and dis > self.think_if_disagree
+        from reflex.escalate import question_features
+
+        probs = np.array(list(key_probs.values()), dtype=np.float64)
+        feats = question_features(
+            state, q.type, q.instructions, len(key_probs), state_tokens, probs, dis
+        )
+        return bool(self.escalator.should_escalate(feats))
+
     def _answer(self, req: SystemOneRequest) -> SystemOneResponse:
         branches: list[Branch] = []
         for qid, q in req.questions.items():
@@ -535,7 +553,8 @@ class Engine:
 
         entry, hit = self.encode_state(req.state)
         per_q: dict[str, list[tuple[Branch, np.ndarray]]] = {}
-        if self.think_tokens and self.think_if_disagree is None:
+        selective = self.think_if_disagree is not None or self.escalator is not None
+        if self.think_tokens and not selective:
             # unconditional System Two: every branch reasons first
             from reflex.think import think_logits
 
@@ -557,10 +576,12 @@ class Engine:
                     per_q[qid], self.cal, q.type, len(entry.ids)
                 )
             results = per_q[qid]
+            key_probs = merge_branches(q.type, results, self.cal, state_tokens=len(entry.ids))
+            path = "fast" if selective else ("reasoned" if self.think_tokens else None)
             if (
-                self.think_if_disagree is not None
+                selective
                 and self.think_tokens
-                and self.last_disagreement.get(qid, 0.0) > self.think_if_disagree
+                and self._escalate(qid, q, req.state, key_probs, len(entry.ids))
             ):
                 from reflex.think import think_logits
 
@@ -570,8 +591,11 @@ class Engine:
                 ]
                 rows = think_logits(self, [(req.state, b) for b in own], self.think_tokens)
                 results = list(zip(own, rows))
-            key_probs = merge_branches(q.type, results, self.cal, state_tokens=len(entry.ids))
+                key_probs = merge_branches(q.type, results, self.cal, state_tokens=len(entry.ids))
+                path = "reasoned"
             answers[qid] = to_answer(q.type, key_probs, q)
+            if path is not None:
+                answers[qid].path = path
 
         q_tokens = sum(len(b) for b in branch_ids)
         usage = Usage(

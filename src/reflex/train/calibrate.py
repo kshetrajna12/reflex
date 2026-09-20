@@ -90,7 +90,9 @@ def evaluate_ensemble(engine, rows: list[dict], permutations: int = 1, seed: int
     """Ensemble readout on labelled rows: every question is asked with each of
     `engine.variants` x `permutations`, the distributions are averaged (with the engine's
     calibration), and the merged answer is scored. Returns (examples aligned to the first
-    branch of each question, probs, disagreement per question)."""
+    branch of each question, probs, disagreement per question, per-question metadata).
+    `meta` carries what a feature extractor downstream needs but `Example` does not keep:
+    the raw state, the question's kind and instructions, and the state's token count."""
     from reflex.ensemble import disagreement, merged_probs_for_keys
     from reflex.prompt import build_branches
     from reflex.schema import SystemOneRequest
@@ -116,7 +118,13 @@ def evaluate_ensemble(engine, rows: list[dict], permutations: int = 1, seed: int
             )
             idx = list(range(len(flat), len(flat) + len(brs)))
             flat.extend((req.state, b) for b in brs)
-            groups.append((ex, idx, q.type, brs, len(sids)))
+            meta = {
+                "state": req.state,
+                "kind": q.type,
+                "instructions": q.instructions,
+                "state_tokens": len(sids),
+            }
+            groups.append((ex, idx, q.type, brs, len(sids), meta))
     log.info(
         "ensemble eval: %d questions, %d branches (%d variants x %d permutations)",
         len(groups),
@@ -128,14 +136,15 @@ def evaluate_ensemble(engine, rows: list[dict], permutations: int = 1, seed: int
     K = max(len(g[0].branch.keys) for g in groups)
     probs = np.zeros((len(groups), K))
     dis = np.zeros(len(groups))
-    exs = []
-    for gi, (ex, idx, kind, brs, n_state) in enumerate(groups):
+    exs, metas = [], []
+    for gi, (ex, idx, kind, brs, n_state, meta) in enumerate(groups):
         results = [(brs[j], rows_logits[i]) for j, i in enumerate(idx)]
         p = merged_probs_for_keys(kind, results, engine.cal, ex.branch.keys, n_state)
         probs[gi, : len(p)] = p
         dis[gi] = disagreement(results, engine.cal, kind, n_state)
         exs.append(ex)
-    return exs, probs, dis
+        metas.append(meta)
+    return exs, probs, dis, metas
 
 
 def evaluate_probs(exs: list[Example], probs: np.ndarray, logits: np.ndarray) -> dict[str, str]:
@@ -383,7 +392,9 @@ def evaluate_adapter(args):
     if args.ensemble or args.permutations > 1:
         from reflex.train.data import read_jsonl
 
-        exs, probs, dis = evaluate_ensemble(engine, list(read_jsonl(args.val)), args.permutations)
+        exs, probs, dis, _ = evaluate_ensemble(
+            engine, list(read_jsonl(args.val)), args.permutations
+        )
         fake_logits = np.log(np.clip(probs, 1e-9, 1.0))
         print_reports(
             f"ensemble ({len(engine.variants)} variants x {args.permutations} orders, engine calibration)",
