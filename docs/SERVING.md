@@ -111,3 +111,26 @@ structural rather than a mask. The recipe follows
 (`--think`), the escalation cascade (`--escalate`) and LoRA adapters (`--adapter`) all
 need the weights in reflex's own process; the flags are rejected rather than ignored.
 Serve the default transformers backend for those.
+
+### Which backend, and at what size
+
+Measured on GB10 (`docs/results/sglang-backend.md`), three questions, warm state:
+
+| | warm p50 | 8 clients | memory |
+|---|---|---|---|
+| Qwen3.5-4B, transformers | 82 ms | 6.92 req/s | ~9 GB |
+| Qwen3.5-4B, SGLang | 182 ms | 4.87 req/s | ~20 GB |
+| Qwen3.8-27B bf16, transformers | 364 ms | 1.52 req/s | ~52 GB |
+| Qwen3.8-27B bf16, SGLang | 507 ms | 2.22 req/s | ~85 GB |
+| Qwen3.8-27B NVFP4, SGLang | 208 ms | 4.52 req/s | ~54 GB |
+
+At 4B the in-process engine wins; serve `--backend transformers`. At 27B SGLang wins
+throughput, and the NVFP4 checkpoint (`RadixArk/Qwen3.8-27B-NVFP4`, which the stock
+nightly image loads with no extra flags) wins everything.
+
+**One caveat before you serve NVFP4.** Its accuracy matches bf16 but its calibration does
+not: pooled external-set ECE rises from 0.044 to 0.067, and hard-tier ECE on the public
+items from 0.061 to 0.087. Quantization moves the probability distribution about ten times
+more than the choice of backend does. If you rely on the numbers rather than the argmax,
+fit a temperature on the NVFP4 checkpoint itself (`reflex-calibrate`) and re-measure before
+thresholding on it. A calibration file fitted on bf16 does not transfer.
