@@ -132,6 +132,9 @@ def main(argv=None):
         help="System Two readout: reasoning tokens per branch before the logits are read "
         "(slow; for offline teachers and experiments, not serving)",
     )
+    ap.add_argument(
+        "--ensemble", default=None, help="prompt-ensemble variants json (reflex.ensemble)"
+    )
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8008)
     ap.add_argument("--max-pack-tokens", type=int, default=8192)
@@ -169,6 +172,7 @@ def main(argv=None):
         dtype=getattr(torch, args.dtype),
         max_pack_tokens=args.max_pack_tokens,
         think_tokens=args.think,
+        ensemble=args.ensemble,
         **kw,
     )
     if args.served_name:

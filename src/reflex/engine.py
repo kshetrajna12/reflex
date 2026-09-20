@@ -219,6 +219,10 @@ class Engine:
         self.model = model
         self.tok = tokenizer
         self.fmt = fmt
+        # prompt-ensemble readout (reflex.ensemble): question-side wording variants whose
+        # distributions are averaged; [fmt] alone is the plain single-prompt readout
+        self.variants: list[PromptFormat] = [fmt]
+        self.last_disagreement: dict[str, float] = {}
         self.cal = calibration or Calibration()
         self.max_pack_tokens = max_pack_tokens
         self.max_branch_tokens = max_branch_tokens
@@ -258,6 +262,7 @@ class Engine:
         adapter_path: str | None = None,
         prompt_style: str = "markdown",
         prompt_texts: str | dict | None = None,
+        ensemble: str | list[dict] | None = None,
         **engine_kwargs,
     ) -> Engine:
         from transformers import (
@@ -295,6 +300,11 @@ class Engine:
         )
         cal = Calibration.load(calibration_path)
         eng = cls(model, tok, fmt, cal, model_name=model_id, processor=processor, **engine_kwargs)
+        if ensemble:
+            from reflex.ensemble import load_ensemble, variant_formats
+
+            eng.variants = variant_formats(fmt, load_ensemble(ensemble))
+            log.info("prompt ensemble: %d variants", len(eng.variants))
         log.info(
             "loaded %s (chat=%s no_think=%s multimodal=%s strategy=%s) on %s",
             model_id,
@@ -516,9 +526,10 @@ class Engine:
         rng = random.Random(0)
         branches: list[Branch] = []
         for qid, q in req.questions.items():
-            branches.extend(
-                build_branches(qid, q, self.fmt, req.permutations or self.default_permutations, rng)
-            )
+            for fmt in self.variants:
+                branches.extend(
+                    build_branches(qid, q, fmt, req.permutations or self.default_permutations, rng)
+                )
         branch_ids = [self._encode(b.text) for b in branches]
 
         entry, hit = self.encode_state(req.state)
@@ -535,9 +546,16 @@ class Engine:
                 per_q.setdefault(b.qid, []).append((b, self.restrict(row, b).cpu().numpy()))
 
         answers = {}
+        self.last_disagreement = {}
         for qid, q in req.questions.items():
             key_probs = merge_branches(q.type, per_q[qid], self.cal, state_tokens=len(entry.ids))
             answers[qid] = to_answer(q.type, key_probs, q)
+            if len(per_q[qid]) > 1:
+                from reflex.ensemble import disagreement
+
+                self.last_disagreement[qid] = disagreement(
+                    per_q[qid], self.cal, q.type, len(entry.ids)
+                )
 
         q_tokens = sum(len(b) for b in branch_ids)
         usage = Usage(
