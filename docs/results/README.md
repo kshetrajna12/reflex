@@ -40,6 +40,7 @@ escalates ([../VISION.md](../VISION.md)).
 | 09-20 | [position-prior](position-prior.md) | Fit the model's prior over option letters offline (PriDe, and the content-free variant) and divide it out, to get two orders' quality from one pass. | **Rejected.** The 4B has almost no letter bias to remove outside the yes/no pair; debiasing costs accuracy on the external sets (0.808 → 0.803) and is worse than one order on the public items (hard 0.649, ECE 0.124). Also found that order-averaging's external-set ECE claim for one order (~0.055) does not reproduce; it measures 0.028. |
 | 09-20 | [serving-engines-research](serving-engines-research.md) | Prior art: has anyone run this readout on vLLM or SGLang? | Yes on SGLang (`ekzhang/openjev-sglang`); not on vLLM, which has no exact per-token-id log-probabilities and a prefix-cache cliff on hybrids. |
 | 09-20 | [sglang-backend](sglang-backend.md) | `--backend sglang`: the same prompt and readout computed by an SGLang server. | Equivalent probabilities (median difference 0.004), about 2.2x slower than the in-process engine at 4B, and the way to serve the 27B: NVFP4 on SGLang is ~208 ms warm but costs calibration (ECE 0.061 → 0.087). |
+| 09-21 | [jevbench-official](jevbench-official.md) | The author's runs of both entries on the full frozen set. | reflex (4B, mix3 LoRA) #5 of 36, score 71.7; reflex-27b #22 but top Intelligence (90.5) and Calibration (86.2), hard 75.9 % vs Jev 74.1 %; cost and speed set the rank. |
 
 ## Related documents outside this directory
 

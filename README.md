@@ -38,11 +38,12 @@ pass over a frozen open-weights model. No decoding, no reasoning, no escalation:
 | reflex, frozen Qwen3.8-27B, two orders | 1.000 | 0.958 | 0.766 | 0.061 | ~1 s |
 | Jev 1.13.0 (official) | 1.000 | 0.986 | 0.730 | 0.031 | |
 
-Ours are self-run numbers on a suite we have consulted throughout development, so treat
-them as development numbers, not an independent test. Both configurations are filed on
-JevBench and queued by its author (issues
-[#3](https://github.com/fstandhartinger/jevbench/issues/3) and
-[#5](https://github.com/fstandhartinger/jevbench/issues/5)).
+Ours are self-run numbers on a suite we have consulted throughout development. The
+**official JevBench v1.2 runs** (534 decisions including held-out items, run by the
+benchmark's author on an H100) placed reflex (4B, an earlier LoRA configuration) **#5 of 36**
+with score 71.7, and reflex-27b **#22** with the highest Intelligence (90.5) and Calibration
+(86.2) on the board and hard-tier 75.9 % against Jev's 74.1 %, held back by cost and speed.
+Details and what was actually run: [docs/results/jevbench-official.md](docs/results/jevbench-official.md).
 
 **What is proven not to help.** Fine-tuning, in every form we tried. Four LoRA mixes on
 public datasets and a distillation from a 27B teacher all won on data shaped like their
