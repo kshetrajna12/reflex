@@ -58,3 +58,9 @@ the first adapter to do so. On the benchmark's hard tier it did *not* improve (0
 0.658 frozen, teacher 0.703). Full numbers and the item-level analysis:
 [results/lora-distill-qwen3.5-4b.md](results/lora-distill-qwen3.5-4b.md); teacher gates:
 [results/teachers-27b-and-4b-think.md](results/teachers-27b-and-4b-think.md).
+
+The same pipeline with the frozen student as its own teacher, labelling at two option
+orders, distils the order-averaged readout into one pass: agreement with the two-order
+answer rises from 0.83 to 0.94 and public-item calibration beats two orders at half the
+branch cost, while the hard tier loses the same families this run lost
+([results/self-distill-orders.md](results/self-distill-orders.md)).
