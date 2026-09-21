@@ -15,7 +15,7 @@ that gap inside one pass is the whole job.
 
 1. **The readout.** The cheapest gains we have found are here. Asking each question in two
    distinct option orders and averaging the distributions costs one wider pass, no training
-   and no fitted parameters, and roughly halves calibration error
+   and no fitted parameters, and improves hard-tier calibration on the public items
    ([order-averaging.md](results/order-averaging.md)). It is the `stable` configuration.
    Wording ensembles did not pay ([order-averaging.md](results/order-averaging.md), "What
    did not help"); more orders than two did not either. Further readout work is welcome as

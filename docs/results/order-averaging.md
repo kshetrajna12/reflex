@@ -28,9 +28,11 @@ ambiguous 0.71 → 0.57 (four items).
 |---|---|---|
 | support intents / MNLI / toxic-chat / Yelp | 0.907 / 0.840 / 0.843 / 0.640 | 0.917 / 0.837 / 0.833 / 0.653 |
 | accuracy, 4-set mean | 0.808 | 0.810 |
-| pooled top-label ECE | ~0.055 | **0.032** |
+| pooled top-label ECE | 0.028 | 0.032 |
 
-Accuracy is unchanged within noise; calibration error roughly halves. The gateway serves a
+Accuracy is unchanged within noise, and so is pooled calibration on these sets (a later
+re-measurement put the single-order figure at 0.028, not the ~0.055 first recorded here;
+see position-prior.md). The calibration case for two orders rests on the public items above. The gateway serves a
 three-question request in ~280 ms warm (was ~180 ms) because the branch count doubles inside
 one pass; the state cache and prefill are shared.
 
