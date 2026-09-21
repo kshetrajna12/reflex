@@ -17,6 +17,7 @@ import torch
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from reflex.backends import BackendError
 from reflex.mps import is_out_of_memory
 from reflex.schema import SystemOneRequest, SystemOneResponse
 
@@ -75,6 +76,12 @@ def create_app(engine, api_key: str | None = None) -> FastAPI:
             resp = engine.answer(req)
         except ValueError as e:  # bad labels / too long
             raise HTTPException(status_code=422, detail=str(e))
+        except BackendError as e:
+            # The inference server behind us failed, not us. A dropped connection under a
+            # deep fan-out is transient and worth retrying; say so with 502 rather than
+            # letting it surface as an opaque 500.
+            log.warning("backend failed: %s", e)
+            raise HTTPException(status_code=502, detail=f"backend unavailable: {e}")
         except torch.cuda.OutOfMemoryError:
             out_of_memory = True
         except RuntimeError as e:  # MPS has no OutOfMemoryError of its own
@@ -146,6 +153,7 @@ def _sglang_backend(args):
         calibration=Calibration.load(args.calibration),
         model_name=args.served_name or args.model,
         default_permutations=args.permutations,
+        max_concurrent_branches=args.max_branch_concurrency,
     )
     log.info("sglang backend: %s serving %s", args.sglang_url, backend.model_name)
     return backend
@@ -196,6 +204,14 @@ def main(argv=None):
         choices=["transformers", "sglang"],
         help="transformers: load the model in this process (the default). sglang: read the "
         "same label logits off an SGLang server over HTTP (reflex.backends.sglang)",
+    )
+    ap.add_argument(
+        "--max-branch-concurrency",
+        type=int,
+        default=64,
+        help="most branch requests in flight against SGLang at once, across all callers "
+        "(questions x permutations per request, so a deep fan-out queues here rather "
+        "than at the inference server)",
     )
     ap.add_argument(
         "--sglang-url",

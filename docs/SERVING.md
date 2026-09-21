@@ -113,6 +113,19 @@ you have one that works. A newer nightly or a release that supports the checkpoi
 fine; check that it launches the model before relying on it, and re-measure, because
 neither latency nor calibration carries over between engine versions for free.
 
+**Two flags to set before you benchmark it.** SGLang caps concurrency by the mamba state
+cache, not the KV pool: at `--mem-fraction-static 0.45` the 27B gets 51 state slots and ten
+running requests, and since one reflex request fans out to `questions x permutations`
+branch calls, that ceiling is reached by a single ten-question request. Halving the state
+size with `--mamba-ssm-dtype bfloat16` doubles both (111 slots, 22 running requests) at the
+same memory, roughly doubles throughput wherever the server was saturated, and leaves
+pooled external accuracy and ECE unchanged - though individual probabilities move as much
+as quantization moves them, so re-measure if you threshold on them.
+`reflex-serve --max-branch-concurrency N` bounds how many branch calls reflex keeps in
+flight (default 64), which is where to queue a deep fan-out if you would rather not queue
+it at the inference server. `docs/results/nvfp4-27b.md` has both measurements, and the
+long-cold-state cliff they explain.
+
 reflex still renders the prefix and the branches itself, so `--permutations`,
 `--prompt-style`, `--prompt-texts` and `--calibration` all behave as they do on the
 transformers backend. `--model` names the tokenizer and must be the checkpoint SGLang is

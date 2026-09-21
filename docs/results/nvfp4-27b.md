@@ -42,6 +42,9 @@ and the measurement, from the client box:
         --concurrency 1,2,4,8,16,32 --questions 1,3,10 --requests 48 \
         --state-tokens 150 --out grid.json
 
+Every table below is the `--mamba-ssm-dtype` default (fp32 SSM states) unless it says
+otherwise; one section re-measures a subset with bf16 states and explains why that matters.
+
 `scripts/bench_latency.py` builds a realistic request: a support ticket as the state and
 `n` questions cycling noul / choice / score. **Warm** repeats one state, so SGLang's radix
 cache holds its prefix; **cold** sends a fresh state per request. Every cell is 48
@@ -148,6 +151,12 @@ box.
 | 16 | 4.53 | 5.29 | 7.60 |
 | 32 | 3.76 | 4.82 | 5.99 |
 
+**Read the grid with the next-but-one section in hand.** NVFP4 on SGLang is excellent on
+short states, warm or cold, and as configured here it falls off a cliff on long cold ones:
+a 2,000-token state that nobody repeats costs 6.2 s at one client, five times what its
+prefill is worth, because the question branches stop reusing the state their own request
+just computed. That, and the throughput ceiling below, are both the mamba state cache.
+
 ### What the shape of that grid means
 
 A reflex request is not one call to SGLang. It is one prefix call to warm the radix cache
@@ -171,7 +180,10 @@ mamba state pool, not the KV cache, is what bounds concurrency at
   own prefill rather than reading the radix cache.
 * **p95 tracks p50 closely when the server is not saturated** and separates once it is.
   The one exception in the grid, 4 clients / 3 questions / cold at p95 11.5 s against a
-  p50 of 1.8 s, is a single outlier request; the neighbouring cells do not show it.
+  p50 of 1.8 s, **does not reproduce**. Re-running that cell and its neighbours gives p50
+  853 / 1770 / 3564 ms at 2 / 4 / 8 clients (against 909 / 1799 / 3800 in the sweep) with
+  p95 1134 / 2040 / 4396 ms. The p50s agree to a few percent and the 11.5 s p95 is gone,
+  so it was one stalled request, not a scheduler behaviour to design around.
 
 The practical reading for a caller: **ask for a p50 under half a second and you get it
 with up to 4 concurrent clients asking 1-3 questions each on a state the server has
@@ -198,10 +210,10 @@ The radix cache means the long prefix is prefilled once and the seven branches r
 prefill per request is the whole bill. If states are long and never repeat, this
 deployment is prefill-bound and the question count is nearly free by comparison.
 
-*The one-client cold cell is unstable. The sweep measured p50 6172 ms / 0.16 req/s; a
-re-run of the same cell measured 1356 ms / 0.34 req/s with a p95 of 6298 ms, so individual
-requests differ by 4x depending on whether the prefix survived in the radix cache. Both
-runs are reported rather than the prettier one.
+*The one-client cold cell is bimodal: 6172 ms in the sweep, 1356 ms in one re-run,
+6173 ms in a third run. The next section is the diagnosis - which of the two a run lands on
+is decided by whether the branches get to reuse the state their own request just
+prefilled.
 
 ### The cost of the second option order
 
@@ -232,13 +244,20 @@ thing to drop when you do not.
 `reflex-serve --stable` on the primary box: `Qwen/Qwen3.5-4B`, the transformers backend,
 `--permutations 2`, measured with the same script over the loopback.
 
-| | 4B stable (transformers) | 27B NVFP4 (SGLang) |
-|---|---|---|
-| 1 client, 3 questions, warm p50 | **154 ms** | 232 ms |
-| 1 client, 3 questions, cold p50 | **222 ms** | 600 ms |
-| 8 clients, 3 questions, warm p50 | 1226 ms | **1311 ms** |
-| 8 clients, 3 questions, warm req/s | **6.51** | 5.72 |
-| 8 clients, 3 questions, cold req/s | **4.50** | 2.08 |
+| | Jev (hosted) | 4B stable (transformers) | 27B NVFP4 (SGLang) |
+|---|---|---|---|
+| 1 client, 3 questions, warm p50 | 143 ms | **154 ms** | 232 ms |
+| 1 client, 3 questions, cold p50 | **111 ms** | 222 ms | 600 ms |
+| 1 client, 10 questions, warm p50 | **129 ms** | - | 718 ms |
+| 8 clients, 3 questions, warm p50 | - | 1226 ms | 1311 ms |
+| 8 clients, 3 questions, warm req/s | - | 6.51 | 5.72 |
+| 8 clients, 3 questions, cold req/s | **43.7** | 4.50 | 2.08 |
+
+The hosted Jev column is `docs/results/jev-latency-probe.md`, measured from the same box
+over the public internet; it is a fleet, not one GB10, and it shows: flat in question count
+(ten questions cost what one costs), flat between warm and cold, and 43.7 requests/s at
+eight clients against our 2.1. The comparison worth making is the single-request one, where
+one GB10 is in the same order of magnitude, and the throughput one, where it is not.
 
 The 4B in-process engine is still the faster server at this shape: 1.5x on warm single
 requests, 2.7x on cold, and it holds more throughput at eight clients. Its throughput is
@@ -246,6 +265,119 @@ also flat from 1 to 8 clients (6.51 against 6.51) because the engine serialises 
 lock - the concurrency buys nothing but it costs nothing either. The 27B NVFP4 buys
 accuracy, not speed, and the earlier "NVFP4 beats the transformers engine on every axis"
 was a comparison against the **27B bf16** transformers engine, not against the 4B.
+
+### Why a cold long state costs 6 seconds, and the flag that fixes it
+
+A cold 2,000-token state at one client measures either ~1.3 s or ~6.2 s, and the second
+number is five times what the arithmetic says it should be. Four measurements settle it.
+
+**NVFP4 prefill is healthy.** Raw `/generate` with `max_new_tokens=1`, no reflex in the
+path, one request at a time:
+
+| prompt tokens | p50 | prefill tok/s | cached |
+|---|---|---|---|
+| 160, fresh | 208 ms | 771 | 0 |
+| 2,000, fresh | 894 ms | 2,238 | 0 |
+| 8,000, fresh | 4,243 ms | 1,886 | 0 |
+| 2,000, repeated | 178 ms | - | 1,984 |
+
+About 2.2k prefill tokens/s with a ~175 ms fixed cost per call. A 2,000-token state
+therefore costs ~0.9 s to prefill once, and ~0.18 s if the radix cache holds it.
+
+**The branches are supposed to pay that once, and usually do.** One cold three-question
+request through reflex on an idle server takes **1.24 s**, and SGLang's log shows why:
+
+    seq=1 new=1971 cached=0        <- the prefix warm-up call
+    seq=6 new=748  cached=11520    <- six branches, each reusing ~1,920 tokens
+
+Repeating the same state takes 252 ms (`cached=12032`). Driving the same shape directly -
+a fresh 2,000-token prefix, then six branches extending it, thirty times in a row - holds
+full reuse on every cycle (`cached=1984` each, 1.31 s per cycle).
+
+**In a long run it collapses.** The 24-request cold cell reproduces its 6,173 ms exactly,
+and the log shows the branches re-prefilling the whole state:
+
+    seq=1 new=1974 cached=0        <- the prefix
+    seq=5 new=8192 cached=640      <- five branches, recomputing (8192 = chunked_prefill_size)
+    seq=2 new=2750 cached=704
+
+Over that cell: 345,963 new tokens against 345,600 cached, a 50 % hit rate, where full
+reuse would be about 85 %. Seven calls x ~2,000 tokens at 2.2k tok/s **is** 6.2 s. So the
+cliff is not the GEMM and not the KV pool (273k tokens, never full at this size): it is
+prefix reuse failing, and each miss then stores its own full copy of the state, which
+makes the next miss more likely.
+
+**What bounds it is the mamba state cache**, and SGLang says so at startup:
+
+    max_running_requests is capped to 10 by the mamba state cache
+    (max_mamba_cache_size=51, 5 state slots per request). To raise it: increase
+    --mamba-full-memory-ratio or --max-mamba-cache-size, or halve the state size
+    with --mamba-ssm-dtype bfloat16.
+
+Fifty-one slots, five per running request. A hybrid backbone can only reuse a prefix whose
+recurrent state it still holds, and seven concurrent branches want 35 of those 51 slots
+just to run. Taking the flag SGLang suggests - `--mamba-ssm-dtype bfloat16`, same
+`--mem-fraction-static 0.45`, same footprint - gives 111 slots and 22 running requests, and
+moves nearly every number in the grid:
+
+| cell (3 questions unless stated) | fp32 SSM | bf16 SSM |
+|---|---|---|
+| 1 client, warm p50 | 232 ms | **215 ms** |
+| 1 client, cold p50 | 600 ms | **566 ms** |
+| 8 clients, warm | 1311 ms / 5.72 req/s | **690 ms / 9.95 req/s** |
+| 8 clients, cold | 3800 ms / 2.08 req/s | **2996 ms / 2.65 req/s** |
+| 1 client, 10 questions, warm | 718 ms / 13.9 q/s | **334 ms / 29.1 q/s** |
+| 8 clients, 10 questions, warm | 7588 ms / 10.4 q/s | **3558 ms / 21.7 q/s** |
+| 1 client, cold 2,000-token state | 6173 ms | **1289 ms** (24 requests) |
+
+Throughput roughly doubles wherever the server was saturated, which means **the ~17
+questions/s ceiling in the grid above is the mamba cache, not the GPU.**
+
+It is not a complete fix for the long-state case. The same cold 2,000-token cell run to 48
+requests instead of 24 falls back to 6,132 ms, so bf16 SSM states delay the collapse rather
+than prevent it; the reuse failure returns once enough distinct long states have gone
+through. The untried knob is a bigger `--mem-fraction-static`, which this box could not
+afford with the voice stack resident.
+
+**The readout survives the dtype change in aggregate but not per item.** The 1200 external
+items answered through both servers at two orders:
+
+| set | fp32 SSM acc / ECE | bf16 SSM acc / ECE | max prob. delta p50 / p95 / max | top-label agreement |
+|---|---|---|---|---|
+| bitext support | 0.9367 / 0.0295 | 0.9400 / 0.0340 | 0.0007 / 0.0765 / 0.2351 | 98.7 % |
+| MNLI mismatched | 0.8467 / 0.0697 | 0.8433 / 0.0551 | 0.0118 / 0.1381 / 0.3639 | 96.3 % |
+| toxic-chat | 0.8067 / 0.0787 | 0.8167 / 0.0835 | 0.0128 / 0.1388 / 0.3002 | 97.0 % |
+| Yelp stars | 0.6733 / 0.1351 | 0.6800 / 0.1276 | 0.0000 / 0.0797 / 0.3233 | 99.3 % |
+| **pooled** | **0.8158 / 0.0621** | **0.8200 / 0.0610** | 0.0032 / 0.1092 / 0.3639 | **97.8 %** |
+
+Pooled accuracy and ECE are unchanged within run-to-run noise, but individual
+distributions move about as much as the NVFP4 quantization itself moved them (97.8 %
+top-label agreement here against 96.4 % for NVFP4 against bf16 weights). Treat it as a
+throughput knob that is free on average and another source of per-item drift, not as a
+no-op: do not stack it silently under a fitted temperature.
+
+### One request in a hundred thousand fails, and it now says 502
+
+The permutations-1 sweep lost its last cell to an HTTP 500. The cause, from the server log:
+a single `/generate` came back as `httpx.RemoteProtocolError: Server disconnected without
+sending a response`, the backend cancelled that request's nine sibling branches (nine
+`/abort_request` calls, the only nine in the whole session), and the exception reached the
+route as an unhandled error.
+
+It is not a capacity limit and not an unbounded fan-out. The backend already caps branches
+in flight at 64, SGLang logged no KV exhaustion, and the same cell re-ran twice afterwards
+without incident (1.40 and 1.34 req/s). It is one dropped connection out of roughly a
+hundred thousand `/generate` calls in that session - and httpx will not retry a POST, so
+one dropped connection kills one request.
+
+Two changes fall out of it, both small:
+
+* `reflex-serve --backend sglang --max-branch-concurrency N` exposes the fan-out cap that
+  was previously hard-coded at 64, so an operator can hold the queue in reflex instead of
+  at the inference server.
+* `SGLangError` now derives from `reflex.backends.BackendError`, and the route turns it
+  into **HTTP 502** with the upstream message, instead of a 500. An upstream failure is not
+  an internal error, and a 502 tells a caller the request is worth retrying.
 
 ### The reflex HTTP hop is free
 
@@ -435,3 +567,10 @@ somebody else's labelled traffic will not do.
   backend, earlier prompt wording). The 27B bf16 checkpoint needs 85 GB and was not run.
 * The public-item control was re-run today, so the calibrated / uncalibrated comparison is
   same-session; the *external-set* bf16 reference (ECE 0.044) is not.
+* The bf16-SSM comparison re-measures eight cells, not the whole grid, and its 2,000-token
+  row is one concurrency. The claim it supports is "the ceiling is the mamba cache", not a
+  replacement grid.
+* `--mem-fraction-static` was never raised above 0.45, because the box was shared. That is
+  the obvious next experiment for the long-cold-state collapse and it was not run.
+* No bf16-weights prefill comparison: the bf16 27B needs 85 GB and the voice stack was
+  resident, so only NVFP4 prefill throughput was measured.

@@ -46,6 +46,7 @@ from uuid import uuid4
 import httpx
 import numpy as np
 
+from reflex.backends import BackendError
 from reflex.images import has_images
 from reflex.prompt import Branch, PromptFormat, build_branches
 from reflex.readout import Calibration, merge_branches, to_answer
@@ -54,7 +55,7 @@ from reflex.schema import SystemOneRequest, SystemOneResponse, Usage
 log = logging.getLogger(__name__)
 
 
-class SGLangError(RuntimeError):
+class SGLangError(BackendError):
     """The SGLang server refused, timed out or answered something unusable."""
 
 
