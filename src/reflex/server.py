@@ -127,7 +127,6 @@ def _sglang_backend(args):
     from reflex.backends.sglang import SGLangBackend
     from reflex.engine import _load_texts
     from reflex.prompt import PromptFormat
-    from reflex.readout import Calibration
 
     for flag, value in (("--adapter", args.adapter), ("--ensemble", args.ensemble)):
         if value:
@@ -150,13 +149,25 @@ def _sglang_backend(args):
         args.sglang_url,
         tokenizer=tok,
         fmt=fmt,
-        calibration=Calibration.load(args.calibration),
+        calibration=_calibration(args),
         model_name=args.served_name or args.model,
         default_permutations=args.permutations,
         max_concurrent_calls=args.sglang_concurrency,
     )
     log.info("sglang backend: %s serving %s", args.sglang_url, backend.model_name)
     return backend
+
+
+def _calibration(args):
+    """The calibration the readout runs with: temperatures (and head) from --calibration,
+    plus the letter-position prior from --prior when one is given."""
+    from reflex.prior import PositionPrior
+    from reflex.readout import Calibration
+
+    cal = Calibration.load(args.calibration)
+    if args.prior:
+        cal.prior = PositionPrior.load(args.prior)
+    return cal
 
 
 def main(argv=None):
@@ -169,6 +180,13 @@ def main(argv=None):
         "--calibration",
         default=None,
         help="calibration.json (default: the one next to the adapter)",
+    )
+    ap.add_argument(
+        "--prior",
+        default=None,
+        help="position-prior json from `reflex-calibrate fit-prior` (reflex.prior). "
+        "Removes the model's letter-position bias from every branch, which is most of "
+        "what --permutations 2 buys, at one branch per question",
     )
     ap.add_argument(
         "--api-key", default=None, help="require this bearer key on /v1/* (or env REFLEX_API_KEY)"
@@ -249,6 +267,7 @@ def main(argv=None):
             adapter_path=args.adapter,
             calibration_path=args.calibration,
             prompt_texts=args.prompt_texts,
+            prior_path=args.prior,
             prompt_style=args.prompt_style if args.prompt_style != "markdown" else None,
             default_permutations=args.permutations if args.permutations != 1 else None,
         )
@@ -258,6 +277,7 @@ def main(argv=None):
         kw = {
             "model_id": args.model,
             "calibration_path": args.calibration,
+            "prior_path": args.prior,
             "adapter_path": args.adapter,
             "default_permutations": args.permutations,
             "prompt_style": args.prompt_style,

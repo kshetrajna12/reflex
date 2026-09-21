@@ -1,8 +1,9 @@
 """Turn per-branch label probabilities into typed answers.
 
-Also holds the two post-hoc knobs that make a pretrained LM's readout behave like
-a calibrated decision model:
+Also holds the post-hoc knobs that make a pretrained LM's readout behave like a
+calibrated decision model:
   * temperature scaling per primitive (fit on labelled data, see reflex.train.calibrate)
+  * a position prior over option letters, divided out per branch (reflex.prior)
   * a pluggable `confidence` statistic (TypeSafe: "how peaked the distribution is")
 """
 
@@ -16,6 +17,7 @@ from typing import Any
 
 import numpy as np
 
+from reflex.prior import PositionPrior
 from reflex.prompt import Branch
 from reflex.schema import ChoiceAnswer, NoulAnswer, ScoreAnswer, ScoreQuestion
 
@@ -23,12 +25,15 @@ from reflex.schema import ChoiceAnswer, NoulAnswer, ScoreAnswer, ScoreQuestion
 @dataclass
 class Calibration:
     """Temperature applied to the restricted label logits: per primitive, or, when a
-    fitted `head` is present, per question (see reflex.calibration_head)."""
+    fitted `head` is present, per question (see reflex.calibration_head). `prior`, when
+    set, additionally removes the model's letter-position bias from each branch
+    (reflex.prior); it is fitted without labels and may be shipped separately."""
 
     temperature: dict[str, float] = field(
         default_factory=lambda: {"noul": 1.0, "choice": 1.0, "score": 1.0}
     )
     head: list[float] | None = None
+    prior: PositionPrior | None = None
 
     def t(self, kind: str, logits: np.ndarray | None = None, state_tokens: int = 0) -> float:
         if self.head is not None and logits is not None:
@@ -43,12 +48,16 @@ class Calibration:
             return cls()
         with open(path) as f:
             d = json.load(f)
-        return cls(temperature=d["temperature"], head=d.get("head"))
+        prior = PositionPrior.from_dict(d["prior"]) if d.get("prior") else None
+        return cls(temperature=d["temperature"], head=d.get("head"), prior=prior)
 
     def save(self, path: str | Path) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
+        d = {"temperature": self.temperature, "head": self.head}
+        if self.prior is not None:
+            d["prior"] = self.prior.to_dict()
         with open(path, "w") as f:
-            json.dump({"temperature": self.temperature, "head": self.head}, f, indent=2)
+            json.dump(d, f, indent=2)
 
 
 def softmax(logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
@@ -83,6 +92,8 @@ def merge_branches(
     acc: dict[Any, float] = {}
     for br, logits in results:
         probs = softmax(logits, cal.t(kind, logits, state_tokens))
+        if cal.prior is not None:
+            probs = cal.prior.debias(kind, probs)
         for k, pr in zip(br.keys, probs):
             acc[k] = acc.get(k, 0.0) + float(pr)
     n = len(results)

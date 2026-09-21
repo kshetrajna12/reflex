@@ -19,7 +19,14 @@ from typing import Any
 # src/reflex/serving.py -> repo root / serving / stable.json
 STABLE_MANIFEST = Path(__file__).resolve().parents[2] / "serving" / "stable.json"
 
-ENGINE_KEYS = ("adapter", "calibration", "prompt_style", "prompt_texts", "permutations")
+ENGINE_KEYS = (
+    "adapter",
+    "calibration",
+    "prior",
+    "prompt_style",
+    "prompt_texts",
+    "permutations",
+)
 
 
 def load_stable(path: str | Path | None = None) -> dict[str, Any]:
@@ -34,6 +41,7 @@ def load_stable(path: str | Path | None = None) -> dict[str, Any]:
             "prompt_style": "markdown",
             "prompt_texts": None,
             "permutations": 1,
+            "prior": None,
         }
     with open(p) as f:
         return json.load(f)
@@ -46,6 +54,7 @@ def engine_kwargs(manifest: dict[str, Any], **overrides: Any) -> dict[str, Any]:
         "model_id": manifest.get("model", "Qwen/Qwen3.5-4B"),
         "adapter_path": manifest.get("adapter"),
         "calibration_path": manifest.get("calibration"),
+        "prior_path": manifest.get("prior"),
         "prompt_style": manifest.get("prompt_style") or "markdown",
         "prompt_texts": manifest.get("prompt_texts"),
         "default_permutations": int(manifest.get("permutations") or 1),

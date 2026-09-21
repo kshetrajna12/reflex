@@ -29,6 +29,7 @@ def test_engine_kwargs_defaults_and_overrides(tmp_path):
         "model_id": "m",
         "adapter_path": "org/ad",
         "calibration_path": None,
+        "prior_path": None,
         "prompt_style": "markdown",
         "prompt_texts": None,
         "default_permutations": 2,

@@ -254,6 +254,7 @@ class Engine:
         device: str = "cuda",
         attn_implementation: str = "sdpa",
         calibration_path: str | None = None,
+        prior_path: str | None = None,
         chat: bool | None = None,
         adapter_path: str | None = None,
         prompt_style: str = "markdown",
@@ -308,6 +309,11 @@ class Engine:
             texts=_load_texts(prompt_texts),
         )
         cal = Calibration.load(calibration_path)
+        if prior_path:
+            from reflex.prior import PositionPrior
+
+            cal.prior = PositionPrior.load(prior_path)
+            log.info("position prior: %s", prior_path)
         eng = cls(model, tok, fmt, cal, model_name=model_id, processor=processor, **engine_kwargs)
         if ensemble:
             from reflex.ensemble import load_ensemble, variant_formats

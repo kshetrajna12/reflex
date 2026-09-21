@@ -384,26 +384,31 @@ def evaluate_adapter(args):
         args.model,
         adapter_path=args.adapter,
         calibration_path=args.calibration,
+        prior_path=args.prior,
         max_pack_tokens=args.max_pack_tokens,
         prompt_style=args.prompt_style,
         prompt_texts=args.prompt_texts,
         ensemble=args.ensemble,
     )
+    if engine.cal.prior is not None:
+        print(engine.cal.prior.describe())
     readout = None
     if args.think:
         # offline experiment only: reflex.think is not a serving mode
         from reflex.think import think_readout
 
         readout = think_readout(engine, args.think)
-    if args.ensemble or args.permutations > 1:
+    if args.ensemble or args.permutations > 1 or args.prior or args.merged:
         from reflex.train.data import read_jsonl
 
         exs, probs, dis, _ = evaluate_ensemble(
             engine, list(read_jsonl(args.val)), args.permutations, readout=readout
         )
         fake_logits = np.log(np.clip(probs, 1e-9, 1.0))
+        how = "prior-debiased" if engine.cal.prior is not None else "raw"
         print_reports(
-            f"ensemble ({len(engine.variants)} variants x {args.permutations} orders, engine calibration)",
+            f"merged ({len(engine.variants)} variants x {args.permutations} orders, "
+            f"{how}, engine calibration)",
             evaluate_probs(exs, probs, fake_logits),
         )
         correct = np.array([int(p.argmax()) == e.hard_label for p, e in zip(probs, exs)])
@@ -437,6 +442,77 @@ def evaluate_adapter(args):
         np.savez(
             args.dump, logits=logits, labels=labels, kinds=kinds, n_options=n_opts, state_tokens=st
         )
+
+
+def fit_prior(args):
+    """Fit the letter-position prior for a model, without labels (see reflex.prior)."""
+    from reflex.engine import Engine
+    from reflex.prior import CONTENT_FREE_STATE, PriorFitter
+    from reflex.prompt import build_branches
+    from reflex.readout import softmax
+    from reflex.schema import SystemOneRequest
+    from reflex.train.data import read_jsonl
+
+    engine = Engine.load(
+        args.model,
+        adapter_path=args.adapter,
+        calibration_path=args.calibration,
+        max_pack_tokens=args.max_pack_tokens,
+        prompt_style=args.prompt_style,
+        prompt_texts=args.prompt_texts,
+    )
+    rows = list(read_jsonl(args.data))
+    drop = set(args.exclude_source or [])
+    keep = set(args.source or [])
+    rows = [
+        r for r in rows if r.get("source") not in drop and (not keep or r.get("source") in keep)
+    ]
+    random.Random(args.seed).shuffle(rows)
+    rows = rows[: args.n]
+    content_free = args.method == "content-free"
+    perms = 1 if content_free else max(2, args.permutations)
+
+    flat: list = []
+    groups: list[tuple[str, list[int], list, int]] = []
+    for ri, row in enumerate(rows):
+        state = CONTENT_FREE_STATE if content_free else row["state"]
+        req = SystemOneRequest(state=state, questions=row["questions"])
+        _, sids, _, _ = engine.state_inputs(req.state)
+        for qid, q in req.questions.items():
+            brs = build_branches(qid, q, engine.fmt, perms, seed=args.seed * 100003 + ri)
+            idx = list(range(len(flat), len(flat) + len(brs)))
+            flat.extend((req.state, b) for b in brs)
+            groups.append((q.type, idx, brs, len(sids)))
+    log.info(
+        "fitting a %s prior on %d questions (%d branches) from %s",
+        args.method,
+        len(groups),
+        len(flat),
+        args.data,
+    )
+    logits = engine.label_logits_batch(flat)
+
+    fitter = PriorFitter()
+    for kind, idx, brs, n_state in groups:
+        readings = [
+            (brs[j], softmax(logits[i], engine.cal.t(kind, logits[i], n_state)))
+            for j, i in enumerate(idx)
+        ]
+        if content_free:
+            fitter.add_content_free(kind, readings[0][1])
+        else:
+            fitter.add_permuted(kind, [(br.keys, p) for br, p in readings])
+
+    prior = fitter.finish(
+        min_questions=args.min_questions,
+        mode=args.mode,
+        strength=args.strength,
+        model=args.model,
+        method=args.method,
+    )
+    print(prior.describe())
+    prior.save(args.out)
+    log.info("wrote %s (%d cells)", args.out, len(prior.table))
 
 
 def refit(args):
@@ -494,6 +570,16 @@ def main(argv=None):
     ev.add_argument(
         "--permutations", type=int, default=1, help="option orders per question (merged)"
     )
+    ev.add_argument(
+        "--prior",
+        default=None,
+        help="position-prior json from `fit-prior`; divided out of every branch",
+    )
+    ev.add_argument(
+        "--merged",
+        action="store_true",
+        help="use the merging readout even at one order and no prior (the comparable baseline)",
+    )
     r.add_argument("--model", default="Qwen/Qwen3.5-4B")
     r.add_argument(
         "--adapter", default=None, help="adapter dir or hub id; omit to calibrate the base model"
@@ -504,6 +590,34 @@ def main(argv=None):
     )
     r.add_argument("--max-pack-tokens", type=int, default=4096)
     r.add_argument("--prompt-style", default="markdown", choices=["markdown", "compact"])
+
+    fp = sub.add_parser(
+        "fit-prior", help="fit the letter-position prior for a model (no labels needed)"
+    )
+    fp.add_argument("--model", default="Qwen/Qwen3.5-4B")
+    fp.add_argument("--adapter", default=None)
+    fp.add_argument("--calibration", default=None)
+    fp.add_argument("--data", required=True, help="jsonl of {state, questions}; labels ignored")
+    fp.add_argument("--out", required=True)
+    fp.add_argument("--n", type=int, default=400, help="rows to sample from --data")
+    fp.add_argument(
+        "--method",
+        default="permuted",
+        choices=["permuted", "content-free"],
+        help="permuted: PriDe, the excess a single order puts on each position over the "
+        "order-averaged reading. content-free: Zhao et al., read with the state replaced by "
+        f"{'N/A'!r}",
+    )
+    fp.add_argument("--permutations", type=int, default=4, help="orders per question (permuted)")
+    fp.add_argument("--mode", default="div", choices=["div", "sub"], help="how to remove it")
+    fp.add_argument("--strength", type=float, default=1.0)
+    fp.add_argument("--min-questions", type=int, default=20, help="drop thinner cells")
+    fp.add_argument("--source", action="append", default=None, help="keep only these sources")
+    fp.add_argument("--exclude-source", action="append", default=None, help="hold these out")
+    fp.add_argument("--max-pack-tokens", type=int, default=4096)
+    fp.add_argument("--prompt-style", default="markdown", choices=["markdown", "compact"])
+    fp.add_argument("--prompt-texts", default=None)
+    fp.add_argument("--seed", type=int, default=0)
 
     m = sub.add_parser("make-mmlu", help="write MMLU as reflex training JSONL")
     m.add_argument("--out", required=True)
@@ -540,6 +654,8 @@ def main(argv=None):
     if args.cmd == "make-mmlu":
         n = mmlu_to_jsonl(args.out, args.split, args.n, args.seed)
         print(f"wrote {n} items to {args.out}")
+    elif args.cmd == "fit-prior":
+        fit_prior(args)
     elif args.cmd == "refit":
         refit(args)
     elif args.cmd == "eval":
