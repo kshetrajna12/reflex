@@ -23,9 +23,11 @@ cancelled evaluation can abort its siblings.
 SGLang's native `/generate` takes all of those fields per item: `input_ids` as a list of
 lists makes it a batch, and `sampling_params`, `return_logprob`, `logprob_start_len`,
 `top_logprobs_num`, `token_ids_logprob` and `rid` are then lists of the same length, one
-entry per item. So one reflex request is one HTTP call, whatever its question count —
-`docs/results/sglang-batched.md` measures what that is worth. The items still become
-independent scheduler requests, so nothing about isolation or the radix cache changes.
+entry per item. So one reflex request is one HTTP call, whatever its question count. The
+items still become independent scheduler requests, so nothing about isolation or the radix
+cache changes, and `docs/results/sglang-batched.md` measures what it is worth: packing the
+branches into one envelope is free rather than fast, and what actually moves is that
+`max_concurrent_calls` below now bounds requests instead of branches.
 
 Everything above the HTTP call is reflex's: `PromptFormat` renders the prefix and the
 branches, `build_branches` produces the permutations and the lettered yes/no pair, and

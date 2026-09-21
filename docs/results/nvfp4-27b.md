@@ -167,6 +167,14 @@ A reflex request is not one call to SGLang. It is one prefix call to warm the ra
 branches = questions x permutations. Ten questions at two orders is **21 HTTP calls**, and
 they all go out at once.
 
+*(Since this grid was measured the backend sends all the branches of a request in one
+batched `/generate` instead - `docs/results/sglang-batched.md`. The calls are what changed,
+not the work: matched call for call the two are the same speed. What does move is that
+`--sglang-concurrency` now bounds requests rather than branches, which stops the default of
+8 throttling a wide request: 10 questions warm at one client goes 658 -> 329 ms and 3
+questions at eight clients 5.85 -> 9.33 req/s. Read the shape of this grid as still true and
+its absolute numbers for wide cells as pessimistic by up to 2x.)*
+
 SGLang on this configuration reports `max_running_requests=9` - the hybrid backbone's
 mamba state pool, not the KV cache, is what bounds concurrency at
 `--mem-fraction-static 0.45`. So:
@@ -391,9 +399,13 @@ not work, and every one of them is a chance to lose the whole request. Three cha
   `SGLangBackend(max_concurrent_branches=...)` defaults to **8** instead of 64, exposed as
   `reflex-serve --backend sglang --sglang-concurrency N`. The queue sits in reflex, where
   it is visible, rather than as connections on the inference server.
-* **It costs nothing.** The same cell, same server, bound 8 against bound 64:
+* **It costs nothing on that cell.** The same cell, same server, bound 8 against bound 64:
   1.53 against 1.56 requests/s, p50 5378 against 4828 ms. Throughput is identical within
-  noise and no request failed at either setting. (Measured with reflex on the client box
+  noise and no request failed at either setting. It is *not* free everywhere, and
+  `docs/results/sglang-batched.md` found where: on warm cells wide enough to want more than
+  eight branches at once, bound 8 costs up to 2x (10 questions at one client, 658 against
+  328 ms at bound 64). The cell measured here is cold and long, where the server is
+  prefill-bound and the extra branches would only queue. (Measured with reflex on the client box
   rather than beside SGLang, so these two are comparable to each other, not to the grid.)
 * **An upstream failure now says 502.** `SGLangError` derives from
   `reflex.backends.BackendError` and the route turns it into HTTP 502 with the upstream
@@ -417,6 +429,11 @@ directly with no reflex server in the path:
 
 Within a millisecond or two everywhere. uvicorn, the pydantic validation and a LAN round
 trip together cost less than 1 % of a request; all of the time is SGLang's.
+
+The same turns out to be true of the *branch* round trips, which was less obvious: sending
+twenty branches as one batched `/generate` instead of twenty concurrent ones costs 614 ms
+against 616 ms. `docs/results/sglang-batched.md` measures that and the rest of the batched
+backend.
 
 ## Task 2: refitting the calibration on the NVFP4 checkpoint
 

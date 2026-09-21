@@ -121,12 +121,15 @@ size with `--mamba-ssm-dtype bfloat16` doubles both (111 slots, 22 running reque
 same memory, roughly doubles throughput wherever the server was saturated, and leaves
 pooled external accuracy and ECE unchanged - though individual probabilities move as much
 as quantization moves them, so re-measure if you threshold on them.
-`reflex-serve --sglang-concurrency N` bounds how many branch calls reflex keeps in flight
-(default 8, a little above what one server runs at a time). A ten-question request at two
-orders is 21 calls and eight such clients are 168; above the server's own limit those are
-open connections rather than work, and a dropped one fails the whole request. Raise it if
-you point reflex at a fleet. `docs/results/nvfp4-27b.md` has both measurements, and the
-long-cold-state cliff they explain.
+`reflex-serve --sglang-concurrency N` bounds how many `/generate` calls reflex keeps in
+flight, and one reflex request is one call whatever its question count, so N is really "how
+many requests at once" (default 8). Set it from the server's own `max_running_requests`
+divided by the branches a typical request carries: on the 27B above that is 22 / 6, so 8 is
+about right and lets a wide request use the whole server; on a starved server (the 4B at
+`--mem-fraction-static 0.15` runs three at a time) 8 requests is 48 branches of queue, which
+costs prefix reuse on cold states, and 2 measures better. `docs/results/nvfp4-27b.md` has
+the mamba measurements and the long-cold-state cliff; `docs/results/sglang-batched.md` has
+the bound.
 
 reflex still renders the prefix and the branches itself, so `--permutations`,
 `--prompt-style`, `--prompt-texts` and `--calibration` all behave as they do on the
@@ -134,12 +137,14 @@ transformers backend. `--model` names the tokenizer and must be the checkpoint S
 serving. The reflex process holds no weights, so it needs no GPU of its own.
 
 How it works: the shared prefix is sent once with `max_new_tokens=1` to warm SGLang's
-radix cache, then one `/generate` per branch goes out concurrently with
-`return_logprob`, `logprob_start_len=-1` and `token_ids_logprob` set to that branch's
-label token ids. Each branch is a separate request, so isolation between questions is
-structural rather than a mask. The recipe follows
+radix cache, then every branch goes out in a single batched `/generate` - `input_ids` as a
+list of lists, with `return_logprob`, `logprob_start_len=-1` and `token_ids_logprob` as
+per-item lists, so each branch asks for its own label token ids. Each item is still a
+separate scheduler request, so isolation between questions is structural rather than a
+mask. The recipe follows
 [ekzhang/openjev-sglang](https://github.com/ekzhang/openjev-sglang);
-`docs/results/sglang-backend.md` has the equivalence, latency and accuracy numbers.
+`docs/results/sglang-backend.md` has the equivalence, latency and accuracy numbers and
+`docs/results/sglang-batched.md` has what batching the branches was and was not worth.
 
 **What the SGLang backend does not do.** Images in the state, LoRA adapters
 (`--adapter`), prompt ensembles (`--ensemble`) and `--device` all need the weights in
