@@ -44,6 +44,9 @@ and the measurement, from the client box:
 
 Every table below is the `--mamba-ssm-dtype` default (fp32 SSM states) unless it says
 otherwise; one section re-measures a subset with bf16 states and explains why that matters.
+The grid was also measured before the branch fan-out was bounded, so it ran with up to 64
+branch calls in flight; the default is now 8, which the fan-out section shows costs no
+throughput.
 
 `scripts/bench_latency.py` builds a realistic request: a support ticket as the state and
 `n` questions cycling noul / choice / score. **Warm** repeats one state, so SGLang's radix
@@ -272,7 +275,9 @@ A cold 2,000-token state at one client measures either ~1.3 s or ~6.2 s, and the
 number is five times what the arithmetic says it should be. Four measurements settle it.
 
 **NVFP4 prefill is healthy.** Raw `/generate` with `max_new_tokens=1`, no reflex in the
-path, one request at a time:
+path, one request at a time, on the server as configured for the whole grid
+(`--mem-fraction-static 0.45`, `chunked_prefill_size=8192`, `max_prefill_tokens=16384`,
+KV pool 273-299k tokens):
 
 | prompt tokens | p50 | prefill tok/s | cached |
 |---|---|---|---|
@@ -283,6 +288,15 @@ path, one request at a time:
 
 About 2.2k prefill tokens/s with a ~175 ms fixed cost per call. A 2,000-token state
 therefore costs ~0.9 s to prefill once, and ~0.18 s if the radix cache holds it.
+
+Repeated with the cleanest possible cold definition - the same 2,000 tokens every time
+with **only the first token changed**, so not one block can be reused - the number is
+steady to a percent: 886, 890, 891, 890, 891 ms, `cached=0` on every call, p50 890 ms,
+**2,246 prefill tokens/s**; the identical prompt sent twice comes back in 179 ms with
+`cached=1984`. So the fp4 prefill path is not the problem and neither is chunked prefill
+(a 2,000-token prompt is well inside the 8,192-token chunk): one full prefill of a
+2,000-token state costs 0.9 s, and the 6.2 s a cold request actually takes is seven of
+them.
 
 **The branches are supposed to pay that once, and usually do.** One cold three-question
 request through reflex on an idle server takes **1.24 s**, and SGLang's log shows why:
@@ -364,20 +378,30 @@ sending a response`, the backend cancelled that request's nine sibling branches 
 `/abort_request` calls, the only nine in the whole session), and the exception reached the
 route as an unhandled error.
 
-It is not a capacity limit and not an unbounded fan-out. The backend already caps branches
-in flight at 64, SGLang logged no KV exhaustion, and the same cell re-ran twice afterwards
-without incident (1.40 and 1.34 req/s). It is one dropped connection out of roughly a
-hundred thousand `/generate` calls in that session - and httpx will not retry a POST, so
-one dropped connection kills one request.
+SGLang logged no KV exhaustion and the same cell re-ran twice afterwards without incident
+(1.40 and 1.34 req/s), so it is one dropped connection out of roughly a hundred thousand
+`/generate` calls - and httpx will not retry a POST, so one dropped connection kills one
+request.
 
-Two changes fall out of it, both small:
+That makes it partly ours. The cell puts **80 branch calls** in flight against a server
+whose `max_running_requests` is 9: seventy of them are queue depth and open connections,
+not work, and every one of them is a chance to lose the whole request. Three changes:
 
-* `reflex-serve --backend sglang --max-branch-concurrency N` exposes the fan-out cap that
-  was previously hard-coded at 64, so an operator can hold the queue in reflex instead of
-  at the inference server.
-* `SGLangError` now derives from `reflex.backends.BackendError`, and the route turns it
-  into **HTTP 502** with the upstream message, instead of a 500. An upstream failure is not
-  an internal error, and a 502 tells a caller the request is worth retrying.
+* **The fan-out is bounded, and the bound is now the default.**
+  `SGLangBackend(max_concurrent_branches=...)` defaults to **8** instead of 64, exposed as
+  `reflex-serve --backend sglang --sglang-concurrency N`. The queue sits in reflex, where
+  it is visible, rather than as connections on the inference server.
+* **It costs nothing.** The same cell, same server, bound 8 against bound 64:
+  1.53 against 1.56 requests/s, p50 5378 against 4828 ms. Throughput is identical within
+  noise and no request failed at either setting. (Measured with reflex on the client box
+  rather than beside SGLang, so these two are comparable to each other, not to the grid.)
+* **An upstream failure now says 502.** `SGLangError` derives from
+  `reflex.backends.BackendError` and the route turns it into HTTP 502 with the upstream
+  message instead of an opaque 500, which tells a caller the request is worth retrying.
+
+`tests/test_sglang_fanout.py` holds the bound to its promise against a fake server that
+records peak concurrency - no GPU, no weights, no network - including the case that
+matters here: two callers at once still cannot exceed one bound between them.
 
 ### The reflex HTTP hop is free
 

@@ -76,7 +76,7 @@ class SGLangBackend:
         calibration: Calibration | None = None,
         model_name: str | None = None,
         default_permutations: int = 1,
-        max_concurrent_branches: int = 64,
+        max_concurrent_branches: int = 8,
         timeout: float = 120.0,
         state_cache_entries: int = 8,
     ):
@@ -102,6 +102,11 @@ class SGLangBackend:
         self._seen: OrderedDict[str, int] = OrderedDict()
         self._state_cache_entries = state_cache_entries
 
+        # Bound the fan-out. One request is questions x permutations branch calls fired
+        # together; a hybrid model's mamba state cache caps SGLang's `max_running_requests`
+        # at a handful, so anything above that bound is queue depth and open connections on
+        # the server rather than work. Hold the queue here, where it is visible.
+        self.max_concurrent_branches = max_concurrent_branches
         self._loop = asyncio.new_event_loop()
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="sglang-io")

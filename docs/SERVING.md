@@ -121,9 +121,11 @@ size with `--mamba-ssm-dtype bfloat16` doubles both (111 slots, 22 running reque
 same memory, roughly doubles throughput wherever the server was saturated, and leaves
 pooled external accuracy and ECE unchanged - though individual probabilities move as much
 as quantization moves them, so re-measure if you threshold on them.
-`reflex-serve --max-branch-concurrency N` bounds how many branch calls reflex keeps in
-flight (default 64), which is where to queue a deep fan-out if you would rather not queue
-it at the inference server. `docs/results/nvfp4-27b.md` has both measurements, and the
+`reflex-serve --sglang-concurrency N` bounds how many branch calls reflex keeps in flight
+(default 8, a little above what one server runs at a time). A ten-question request at two
+orders is 21 calls and eight such clients are 168; above the server's own limit those are
+open connections rather than work, and a dropped one fails the whole request. Raise it if
+you point reflex at a fleet. `docs/results/nvfp4-27b.md` has both measurements, and the
 long-cold-state cliff they explain.
 
 reflex still renders the prefix and the branches itself, so `--permutations`,
