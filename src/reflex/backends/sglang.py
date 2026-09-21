@@ -237,9 +237,11 @@ class SGLangBackend:
             (prefix_ids + ids, [self.label_id(lb) for lb in br.labels])
             for br, ids in zip(branches, branch_ids, strict=True)
         ]
+        results = await _gather(
+            [self._generate(chunk) for chunk in _chunks(items, MAX_BATCH_ITEMS)]
+        )
         rows: list[np.ndarray] = []
-        for chunk in _chunks(items, MAX_BATCH_ITEMS):
-            logps, counts = await self._generate(chunk)
+        for logps, counts in results:
             rows.extend(np.asarray(v, dtype=np.float64) for v in logps)
             prompt_tokens += sum(counts)
         return rows, prompt_tokens
@@ -298,25 +300,30 @@ class SGLangBackend:
         ]
 
         async def go():
-            tasks = [
-                asyncio.ensure_future(self._generate(chunk))
-                for chunk in _chunks(pairs, MAX_BATCH_ITEMS)
-            ]
-            try:
-                return await asyncio.gather(*tasks)
-            except BaseException:
-                for t in tasks:
-                    t.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise
+            return await _gather([self._generate(c) for c in _chunks(pairs, MAX_BATCH_ITEMS)])
 
         out = asyncio.run_coroutine_threadsafe(go(), self._loop).result()
         return [np.asarray(v, dtype=np.float64) for logps, _ in out for v in logps]
 
 
-def _chunks(xs: list, n: int):
-    for i in range(0, len(xs), n):
-        yield xs[i : i + n]
+def _chunks(xs: list, n: int) -> list[list]:
+    return [xs[i : i + n] for i in range(0, len(xs), n)]
+
+
+async def _gather(coros: list):
+    """`asyncio.gather`, but a failure cancels the siblings instead of leaving them running.
+
+    The semaphore holds most of them un-started, so a request that dies takes its own queue
+    with it rather than filling the server's.
+    """
+    tasks = [asyncio.ensure_future(c) for c in coros]
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 def _parse_batch(
