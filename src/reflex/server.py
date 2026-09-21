@@ -199,6 +199,13 @@ def main(argv=None):
         "--ensemble", default=None, help="prompt-ensemble variants json (reflex.ensemble)"
     )
     ap.add_argument(
+        "--require-fast-kernels",
+        action="store_true",
+        help="refuse to start if any op fell back to its reference PyTorch implementation "
+        "(a missing flash-linear-attention or causal-conv1d). Off by default; turn it on "
+        "for benchmark runs, where a silent fallback costs an order of magnitude",
+    )
+    ap.add_argument(
         "--backend",
         default="transformers",
         choices=["transformers", "sglang"],
@@ -230,8 +237,14 @@ def main(argv=None):
     import uvicorn
 
     from reflex.engine import Engine
+    from reflex.kernels import describe, kernel_report, require_fast_kernels
 
     if args.backend == "sglang":
+        if args.require_fast_kernels:
+            raise SystemExit(
+                "--require-fast-kernels applies to the in-process model; --backend sglang "
+                "holds no weights here (check the kernels on the SGLang server instead)"
+            )
         engine = _sglang_backend(args)
         uvicorn.run(
             create_app(engine, api_key=args.api_key),
@@ -272,6 +285,10 @@ def main(argv=None):
     )
     if args.served_name:
         engine.model_name = args.served_name
+    report = kernel_report(engine.model)
+    log.info("kernels: %s", describe(report))
+    if args.require_fast_kernels:
+        require_fast_kernels(report)
     uvicorn.run(
         create_app(engine, api_key=args.api_key),
         host=args.host,

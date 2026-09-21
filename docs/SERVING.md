@@ -39,6 +39,59 @@ The first request after start compiles Triton kernels (~20 s). Send one warm-up 
 before timing, as you would for any server. `GET /health` reports the loaded adapter and
 temperatures.
 
+## Timing it fairly
+
+Three things separate a 0.2 s number from a 1.8 s one, and only the first is about us.
+
+**Check the kernel path.** Qwen3.5 is a hybrid backbone: its gated delta rule wants
+`flash-linear-attention`'s Triton kernels and its short convolution wants
+`causal-conv1d`'s compiled CUDA kernel. When either is missing transformers substitutes
+a readable PyTorch reference, logs one warning, and serves correct answers slowly. At
+startup reflex now prints which one it got:
+
+    reflex.server kernels: qwen3_5 | attn=sdpa | bfloat16 on cuda:0 |
+      fast kernels: torch_chunk_gated_delta_rule, torch_recurrent_gated_delta_rule |
+      REFERENCE FALLBACK: causal_conv1d_fn, causal_conv1d_update |
+      installed: flash-linear-attention==0.5.2
+
+Pass `--require-fast-kernels` and the server refuses to start on any fallback instead of
+posting a slow number. Use it for every benchmark run.
+
+`flash-linear-attention` is a hard dependency, so the delta rule is always fast and that
+is the one that matters: it is the whole recurrent backbone. `causal-conv1d` is not a
+dependency, because it has no wheels on PyPI at all -- every release is an sdist that
+compiles against your exact torch and CUDA, ~6 minutes with the arch list pinned to one
+GPU and far longer without. It is worth almost nothing here. Measured on a GB10
+(Qwen3.5-4B, bf16, three questions, two option orders):
+
+| | p50, reference conv | p50, `causal-conv1d` |
+|---|---|---|
+| warm, new state | 185 ms | 183 ms |
+| warm, cached state | 123 ms | 124 ms |
+
+The convolution itself is 1.6x faster with the kernel, on 24 layers of an 8192-wide
+conv over a ~220-token sequence: 2.0 ms per request against 1.2 ms, under 1% of the
+request. The gap only opens on long sequences (3x, ~15 ms per request, at 2048 tokens),
+and reflex never reaches the per-token `causal_conv1d_update` path at all because the
+readout is prefill-only. Install it if your states are long:
+
+    # wheels keyed to your torch and CUDA, from the project's GitHub releases
+    uv pip install causal_conv1d@https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.7.0/causal_conv1d-1.7.0+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+    # or build it, which needs nvcc and several minutes
+    CAUSAL_CONV1D_FORCE_BUILD=TRUE TORCH_CUDA_ARCH_LIST=9.0 \
+        uv pip install --no-build-isolation causal-conv1d
+
+**Expose a direct TCP port.** Put the harness on `http://<host>:8000` straight at
+uvicorn. A tunnel, an ingress proxy or a serverless front door in between adds its own
+connection setup and buffering to every request, and on a rented pod that can be most of
+the number.
+
+**Read `x-reflex-latency-ms`.** Every `/v1/systemone` response carries it. It is the
+wall time of `engine.answer` inside the handler -- prompt building, prefill, readout --
+and nothing else: no request parsing, no response serialization, no network. Your
+client's wall time minus that header is everything outside reflex. If the two are far
+apart, the model is not what is slow.
+
 ## Run the harness against it
 
     export REFLEX_KEY=<secret>
