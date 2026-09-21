@@ -312,7 +312,7 @@ def main(argv=None):
             tokenizer=tok,
             fmt=PromptFormat(chat=bool(template), no_think="enable_thinking" in template),
             default_permutations=args.permutations or 1,
-            max_concurrent_branches=256,
+            max_concurrent_calls=256,
         )
     elif not args.url:
         ap.error("--url is required without --in-process")

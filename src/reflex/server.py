@@ -153,7 +153,7 @@ def _sglang_backend(args):
         calibration=Calibration.load(args.calibration),
         model_name=args.served_name or args.model,
         default_permutations=args.permutations,
-        max_concurrent_branches=args.sglang_concurrency,
+        max_concurrent_calls=args.sglang_concurrency,
     )
     log.info("sglang backend: %s serving %s", args.sglang_url, backend.model_name)
     return backend
@@ -209,10 +209,10 @@ def main(argv=None):
         "--sglang-concurrency",
         type=int,
         default=8,
-        help="most branch requests in flight against SGLang at once, across all callers. "
-        "One reflex request fans out to questions x permutations calls and sends them "
-        "together, while SGLang runs a handful at a time, so the queue belongs here rather "
-        "than as hundreds of open connections there (default 8)",
+        help="most /generate calls in flight against SGLang at once, across all callers. "
+        "One reflex request is one batched call, whatever its question count, so this is "
+        "the number of requests reflex lets through; the queue belongs here, where it is "
+        "visible, rather than as open connections there (default 8)",
     )
     ap.add_argument(
         "--sglang-url",

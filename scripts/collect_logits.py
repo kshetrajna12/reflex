@@ -38,7 +38,7 @@ backend = SGLangBackend(
     tokenizer=tok,
     fmt=fmt,
     default_permutations=a.permutations,
-    max_concurrent_branches=64,
+    max_concurrent_calls=8,
     timeout=600.0,
 )
 

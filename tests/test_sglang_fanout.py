@@ -1,10 +1,10 @@
-"""The branch fan-out must stay inside its bound.
+"""One reflex request must be one `/generate` call, and the calls must stay inside the bound.
 
-One reflex request becomes `questions x permutations` `/generate` calls, fired together.
-SGLang runs only a handful at a time (on a hybrid model its mamba state cache caps
-`max_running_requests`), so an unbounded fan-out buys nothing and costs open connections:
-a dropped one fails the whole request. This runs the backend against a fake server that
-records how many calls are in flight, so it needs no GPU, no weights and no network.
+The backend asks SGLang for every branch of a request in a single batched call, so a
+12-question request at two orders is one POST, not twenty-five. `--sglang-concurrency`
+then bounds how many such calls are in flight at once, across all callers. This runs the
+backend against a fake server that records the request shapes and the peak concurrency, so
+it needs no GPU, no weights and no network.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import json
 import httpx
 import pytest
 
-from reflex.backends.sglang import SGLangBackend
+from reflex.backends.sglang import MAX_BATCH_ITEMS, SGLangBackend, SGLangError
 from reflex.prompt import PromptFormat
 from reflex.schema import SystemOneRequest
 
@@ -36,37 +36,59 @@ class FakeTokenizer:
 
 
 class FakeServer:
-    """Answers `/generate` after a short delay, tracking peak concurrency."""
+    """Answers a batched `/generate` after a short delay, tracking shapes and concurrency."""
 
     def __init__(self, delay: float = 0.02):
         self.delay = delay
         self.in_flight = 0
         self.peak = 0
         self.calls = 0
+        self.batch_sizes: list[int] = []
+        # test hooks: mangle the reply the way a broken server would
+        self.shuffle = False
+        self.drop_label = False
+        self.drop_item = False
+
+    def _item(self, rid: str, ids: list[int], labels: list[int]) -> dict:
+        if self.drop_label:
+            labels = labels[:-1]
+        return {
+            "text": "",
+            "meta_info": {
+                "id": rid,
+                "prompt_tokens": len(ids),
+                "completion_tokens": 1,
+                "output_token_ids_logprobs": [
+                    [[-0.5 - 0.1 * i, tid, None] for i, tid in enumerate(labels)]
+                ],
+            },
+        }
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
+        assert isinstance(body["input_ids"][0], list), "every call must be a batch"
+        n = len(body["input_ids"])
+        for field in ("rid", "sampling_params", "return_logprob", "token_ids_logprob"):
+            assert len(body[field]) == n, f"{field} must carry one entry per item"
         self.calls += 1
+        self.batch_sizes.append(n)
         self.in_flight += 1
         self.peak = max(self.peak, self.in_flight)
         try:
             await asyncio.sleep(self.delay)
         finally:
             self.in_flight -= 1
-        label_ids = body["token_ids_logprob"]
-        return httpx.Response(
-            200,
-            json={
-                "text": "",
-                "meta_info": {
-                    "prompt_tokens": len(body["input_ids"]),
-                    "completion_tokens": 1,
-                    "output_token_ids_logprobs": [
-                        [[-0.5 - 0.1 * i, tid, None] for i, tid in enumerate(label_ids)]
-                    ],
-                },
-            },
-        )
+        items = [
+            self._item(rid, ids, labels)
+            for rid, ids, labels in zip(
+                body["rid"], body["input_ids"], body["token_ids_logprob"], strict=True
+            )
+        ]
+        if self.shuffle and len(items) > 1:
+            items = items[1:] + items[:1]
+        if self.drop_item and len(items) > 1:
+            items = items[:-1]
+        return httpx.Response(200, json=items)
 
 
 def _backend(bound: int, server: FakeServer) -> SGLangBackend:
@@ -74,7 +96,7 @@ def _backend(bound: int, server: FakeServer) -> SGLangBackend:
         "http://fake",
         tokenizer=FakeTokenizer(),
         fmt=PromptFormat(chat=False),
-        max_concurrent_branches=bound,
+        max_concurrent_calls=bound,
     )
     # Swap the transport for the fake server; the io thread owns the client, and replacing
     # it before any request is in flight is safe.
@@ -102,8 +124,25 @@ def _request(n_questions: int, permutations: int) -> SystemOneRequest:
     )
 
 
+def test_one_request_is_one_batched_call():
+    """Three questions at two orders: the prefix warm-up, then all six branches at once."""
+    server = FakeServer()
+    backend = _backend(8, server)
+    try:
+        resp = backend.answer(_request(n_questions=3, permutations=2))
+        first = list(server.batch_sizes)
+        backend.answer(_request(n_questions=3, permutations=2))  # same state, now warm
+    finally:
+        backend.close()
+
+    assert len(resp.answers) == 3
+    assert first == [1, 6], f"expected a 1-item warm-up then a 6-item batch, got {first}"
+    assert server.batch_sizes[2:] == [6], "a warm state skips the warm-up entirely"
+
+
 @pytest.mark.parametrize("bound", [1, 3, 8])
-def test_fanout_never_exceeds_the_bound(bound):
+def test_calls_never_exceed_the_bound(bound):
+    """The bound is on `/generate` calls, and a big request is only a handful of them."""
     server = FakeServer()
     backend = _backend(bound, server)
     try:
@@ -112,10 +151,11 @@ def test_fanout_never_exceeds_the_bound(bound):
         backend.close()
 
     assert len(resp.answers) == 12
-    # 12 questions x 2 orders + one prefix warm-up call
-    assert server.calls == 25
+    # 24 branches, chunked at MAX_BATCH_ITEMS, plus one prefix warm-up call
+    expected = 1 + -(-24 // MAX_BATCH_ITEMS)
+    assert server.calls == expected, f"{server.calls} calls for 24 branches"
+    assert max(server.batch_sizes) <= MAX_BATCH_ITEMS
     assert server.peak <= bound, f"{server.peak} calls in flight, bound was {bound}"
-    assert server.peak == min(bound, 24), "the bound should be reached, not just respected"
 
 
 def test_bound_is_shared_across_concurrent_requests():
@@ -123,11 +163,52 @@ def test_bound_is_shared_across_concurrent_requests():
     from concurrent.futures import ThreadPoolExecutor
 
     server = FakeServer()
-    backend = _backend(4, server)
+    backend = _backend(2, server)
     try:
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            list(pool.map(lambda _: backend.answer(_request(6, 2)), range(3)))
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            list(pool.map(lambda _: backend.answer(_request(6, 2)), range(6)))
     finally:
         backend.close()
 
-    assert server.peak <= 4, f"{server.peak} calls in flight across three callers"
+    assert server.peak <= 2, f"{server.peak} calls in flight across six callers"
+    assert server.peak == 2, "the bound should be reached, not just respected"
+
+
+def test_items_are_matched_by_rid_not_by_position():
+    """A reply that comes back rotated must still answer the right question."""
+    ordered, rotated = FakeServer(), FakeServer()
+    rotated.shuffle = True
+    req = _request(3, 2)
+    out = []
+    for server in (ordered, rotated):
+        backend = _backend(8, server)
+        try:
+            out.append(backend.answer(req))
+        finally:
+            backend.close()
+    for qid in out[0].answers:
+        assert out[0].answers[qid].probabilities == out[1].answers[qid].probabilities
+
+
+def test_a_short_batch_is_an_error():
+    """A reply missing an item must fail loudly rather than answer from someone else's row."""
+    server = FakeServer()
+    server.drop_item = True
+    backend = _backend(8, server)
+    try:
+        with pytest.raises(SGLangError, match="batch items"):
+            backend.answer(_request(3, 2))
+    finally:
+        backend.close()
+
+
+def test_a_missing_label_id_is_an_error():
+    """A label the server never reported is not a zero; it means the rows do not line up."""
+    server = FakeServer()
+    server.drop_label = True
+    backend = _backend(8, server)
+    try:
+        with pytest.raises(SGLangError, match="no log-probability for label ids"):
+            backend.answer(_request(3, 2))
+    finally:
+        backend.close()
