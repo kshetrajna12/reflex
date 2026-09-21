@@ -171,12 +171,7 @@ it.
 Refitting on somebody else's traffic does not work, and `docs/results/nvfp4-27b.md` is the
 measurement: temperatures fitted on the four external sets halve pooled external ECE
 (0.062 -> 0.026, and five-fold cross-validation inside each set says that holds on unseen
-items of the same kind), yet the same file makes calibration error **worse on all three
-public-benchmark tiers**. That fit ships as `calibration/nvfp4-27b.json` so it is
-reproducible, and is passed like any other calibration file:
-
-    reflex-serve --backend sglang --sglang-url http://127.0.0.1:30000 \
-        --model RadixArk/Qwen3.8-27B-NVFP4 --calibration calibration/nvfp4-27b.json
-
-Use it only if your traffic resembles the external sets (`runs/external_eval.jsonl`), and
-measure before you do. It is not a general correction for the checkpoint.
+items of the same kind), yet the same temperatures make calibration error **worse on all
+three public-benchmark tiers**. The fitted values are recorded there for reproducibility;
+no calibration file ships, because nothing that lost its gate does. Fit on your own traffic
+with `reflex-calibrate refit` and measure before thresholding.

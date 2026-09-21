@@ -462,7 +462,7 @@ go from 0.135 to 0.059 ECE, unseen toxic-chat items from 0.079 to 0.036.
 
 Fitted on all four sets at once:
 
-    calibration/nvfp4-27b.json   {"noul": 2.1712, "choice": 1.2712, "score": 1.7623}
+    fitted temperatures (not shipped)   {"noul": 2.1712, "choice": 1.2712, "score": 1.7623}
 
 | source | ECE before | ECE after |
 |---|---|---|
@@ -504,7 +504,7 @@ fits on the box.
 
 ### The public items reject the fit
 
-`calibration/nvfp4-27b.json` was then served (`--calibration`) against the JevBench public
+The fitted temperatures were then served (`--calibration`) against the JevBench public
 items, with an uncalibrated run of the same server on the same day as the control.
 
 | tier | n | uncal acc | cal acc | uncal ECE | cal ECE |
@@ -545,10 +545,9 @@ tension:
 
 So the recommendation in `docs/results/sglang-backend.md` - "serve NVFP4 only behind a
 temperature refitted on the NVFP4 checkpoint" - is **too optimistic as written**. Refitting
-on a distribution that is not your traffic buys nothing and can cost you. The file is
-committed as `calibration/nvfp4-27b.json` so the fit is reproducible and so anyone whose
-traffic looks like the external sets can use it, and `docs/SERVING.md` says how to pass
-it, but nothing in this note supports serving it by default.
+on a distribution that is not your traffic buys nothing and can cost you. The fitted
+values ({"noul": 2.17, "choice": 1.27, "score": 1.76}) are recorded above so the fit is
+reproducible; the file is not shipped, since nothing in this note supports serving it.
 
 What remains true from the earlier note: NVFP4 is over-confident relative to bf16, the
 argmax is unaffected, and a deployment that thresholds on probabilities should fit a
