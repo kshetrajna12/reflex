@@ -48,3 +48,24 @@ def test_validation_error_is_422():
         "questions": {"q": {"type": "choice", "instructions": "?", "criteria": {"only": None}}},
     }
     assert c.post("/v1/systemone", json=bad).status_code == 422
+
+
+def _choice(n):
+    return {
+        "state": "x",
+        "questions": {
+            "q": {
+                "type": "choice",
+                "instructions": "which?",
+                "criteria": {f"k{i}": None for i in range(n)},
+            }
+        },
+    }
+
+
+def test_choice_ceiling_is_256_over_the_wire():
+    c = TestClient(create_app(StubEngine()))
+    assert c.post("/v1/systemone", json=_choice(256)).status_code == 200
+    r = c.post("/v1/systemone", json=_choice(257))
+    assert r.status_code == 422
+    assert "at most 256 options per choice" in r.text

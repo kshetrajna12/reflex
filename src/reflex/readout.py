@@ -72,6 +72,23 @@ def confidence(p: np.ndarray) -> float:
     return float(max(0.0, min(1.0, 1.0 - h / math.log(n))))
 
 
+def group_results(results: list[tuple[Branch, np.ndarray]]):
+    """Pages of one option order back into one reading: [(keys, pooled logits), ...].
+
+    A question with at most 26 options is one page per reading, so each group is a single
+    branch and the pooled array *is* that branch's restricted logits, untouched.
+    """
+    groups: dict[int, list[tuple[Branch, np.ndarray]]] = {}
+    for br, logits in results:
+        groups.setdefault(br.group, []).append((br, logits))
+    out = []
+    for parts in groups.values():
+        keys = [k for br, _ in parts for k in br.keys]
+        pooled = parts[0][1] if len(parts) == 1 else np.concatenate([lg for _, lg in parts])
+        out.append((keys, pooled))
+    return out
+
+
 def merge_branches(
     kind: str, results: list[tuple[Branch, np.ndarray]], cal: Calibration, state_tokens: int = 0
 ):
@@ -79,13 +96,21 @@ def merge_branches(
 
     `results` = [(branch, restricted_logits_in_branch_label_order), ...]
     Returns dict key -> prob (keys in original question order for the first branch).
+
+    Pages of one order are pooled *before* the softmax, so the question keeps one
+    distribution over all of its options. Softmaxing each page on its own would force
+    every page to hold probability one, which would say the answer is as likely to sit on
+    a page of also-rans as on the page that holds it. The engine hands pages over as
+    full-vocabulary log-probabilities so the pooled numbers are on one scale across
+    pages; a single page needs no such thing, because a shared constant cancels.
     """
     acc: dict[Any, float] = {}
-    for br, logits in results:
+    groups = group_results(results)
+    for keys, logits in groups:
         probs = softmax(logits, cal.t(kind, logits, state_tokens))
-        for k, pr in zip(br.keys, probs):
+        for k, pr in zip(keys, probs):
             acc[k] = acc.get(k, 0.0) + float(pr)
-    n = len(results)
+    n = len(groups)
     total = sum(acc.values())
     return {k: v / n / (total / n) for k, v in acc.items()}  # renormalize
 

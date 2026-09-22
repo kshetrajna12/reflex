@@ -380,8 +380,11 @@ in [docs/VISION.md](docs/VISION.md).
   size that fits your GPU; `--model Qwen/Qwen3.5-0.8B` runs on very small cards.
 - The browser demo runs all questions of a request in one batched forward pass, but
   re-reads the state for every question and does not cache it between requests, so it
-  is fine for a handful of questions, not hundreds.
-- A `choice` question can have up to 26 options; `score` can have 2 to 10 levels.
+  is fine for a handful of questions, not hundreds. It does not page: in the browser a
+  `choice` still takes 2 to 26 options.
+- A `choice` question can have up to 256 options; `score` can have 2 to 10 levels. Past
+  26 options the question is shown as several pages of 26 lettered options, all in the
+  same forward pass, and read as one distribution ([docs/results/large-choice.md](docs/results/large-choice.md)).
 - `--device mps` runs the server on an Apple Silicon GPU, `--backend sglang` on an SGLang
   server; `--permutations N` sets how many option orders each question is read in.
 - The model is not magic: check its answers on a handful of your own examples before

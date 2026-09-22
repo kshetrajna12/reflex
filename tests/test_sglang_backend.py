@@ -111,6 +111,19 @@ REQUESTS = [
         },
         permutations=1,
     ),
+    # more options than there are letters: the choice arrives as two pages per order, and
+    # the two backends must pool them to the same distribution
+    SystemOneRequest(
+        state=TICKET,
+        questions={
+            "topic": {
+                "type": "choice",
+                "instructions": "Which of these topics does the ticket belong to?",
+                "criteria": {f"topic_{i:02d}": None for i in range(40)},
+            }
+        },
+        permutations=2,
+    ),
     SystemOneRequest(
         state=REVIEW,
         questions={

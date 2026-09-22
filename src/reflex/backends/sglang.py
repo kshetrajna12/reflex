@@ -29,8 +29,14 @@ cache changes, and `docs/results/sglang-batched.md` measures what it is worth: p
 branches into one envelope is free rather than fast, and what actually moves is that
 `max_concurrent_calls` below now bounds requests instead of branches.
 
+A choice with more than 26 options arrives here as several pages, each an ordinary
+branch with its own label ids, so nothing about the protocol changes: the pages are
+items of the same batched call and `merge_branches` pools them. SGLang reports
+log-probabilities rather than logits, which is exactly the per-page normalisation the
+pooled softmax wants, so the backend needs no counterpart to `Engine.restrict`.
+
 Everything above the HTTP call is reflex's: `PromptFormat` renders the prefix and the
-branches, `build_branches` produces the permutations and the lettered yes/no pair, and
+branches, `build_branches` produces the permutations, the pages and the lettered pair, and
 `readout.merge_branches` does the temperature scaling, the order-averaging and the typed
 answer. A label log-probability is the label logit minus a constant that is shared by
 every label at that position, so softmax — with or without a temperature — gives exactly

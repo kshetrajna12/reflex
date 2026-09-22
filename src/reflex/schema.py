@@ -19,7 +19,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # render for the model (e.g. {"what": ..., "examples": [...]}).
 Text = str | dict[str, Any] | list[Any]
 
-MAX_CHOICE_OPTIONS = 26  # single-letter readout; see README "Limits"
+# Letters label at most 26 options per branch, so a bigger choice is shown as several
+# pages of 26 and read as one distribution (see reflex.prompt). 256 is the ceiling.
+MAX_CHOICE_OPTIONS = 256
 MIN_SCORE_LEVELS = 2
 MAX_SCORE_LEVELS = 10
 

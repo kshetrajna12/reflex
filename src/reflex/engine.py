@@ -19,7 +19,10 @@ pretrained model (Qwen3 / Qwen3-VL / Qwen3.5 by default):
          run as a right-padded batch against a batch-expanded copy of the state cache.
   3. **Direct probability readout.** No decoding. At the last token of each branch we
      take the next-token logits, restrict them to the label tokens (A/B/C…, Yes/No),
-     temperature-scale, softmax. That distribution *is* the answer.
+     temperature-scale, softmax. That distribution *is* the answer. A choice with more
+     than 26 options is shown as several pages of at most 26 (`prompt.paginate`), each
+     its own branch in the same pass; their labels are pooled into one softmax by
+     `readout.merge_branches`.
 
 Everything is "prefill only" – there is no autoregressive loop anywhere.
 """
@@ -375,8 +378,19 @@ class Engine:
         return self.tok.encode(text, add_special_tokens=False)
 
     def restrict(self, row: torch.Tensor, br: Branch) -> torch.Tensor:
-        """Select the label-token logits of one branch, in label order."""
+        """Select the label-token logits of one branch, in label order.
+
+        A branch that is one page of a larger choice is returned as full-vocabulary
+        log-probabilities instead: its labels are about to be pooled with another page's,
+        and raw logits carry a per-prompt offset that the pooled softmax would read as
+        preference. Subtracting each page's own log-sum-exp removes it and leaves
+        log P(label | that page), which is comparable across pages and is also what the
+        SGLang backend reports natively. A lone page keeps its raw logits, because there
+        the constant cancels and this way the 2..26 readout is bit-for-bit unchanged.
+        """
         lab = torch.tensor([self.label_id(lb) for lb in br.labels], device=row.device)
+        if br.n_pages > 1:
+            return row[lab] - torch.logsumexp(row, dim=-1)
         return row[lab]
 
     # ------------------------------------------------------------------------ state cache

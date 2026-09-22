@@ -90,6 +90,28 @@ slower than a forward pass ([VISION.md](VISION.md)).
    data ([results/frozen-vs-trained.md](results/frozen-vs-trained.md)); every piece of
    wording the model sees is a named component in `prompt.DEFAULT_TEXTS`, which is what
    `reflex-optimize` and the ensemble variants edit.
+   **More options than letters** (`prompt.paginate`, `readout.merge_branches`). There are
+   26 single-letter labels, so a choice with more options is split into **pages** of at
+   most 26. Each page is an ordinary branch — same prompt structure, options relettered
+   from `A` — plus one line saying which slice it shows: *"Options 27-52 of 151; the other
+   options are shown separately."* The pages of one option order share a `Branch.group`,
+   and the readout softmaxes over their **pooled** labels rather than per page. Pooling
+   is the whole point: a per-page softmax makes every page hold probability one, which
+   says the answer is as likely to be among 26 also-rans as among the 26 that contain it.
+   For pooling to mean anything the pages have to be on one scale, so `Engine.restrict`
+   returns a paged branch's labels as full-vocabulary log-probabilities, `log P(label |
+   that page)`, instead of raw logits: raw logits carry a per-prompt offset that a pooled
+   softmax would read as preference. SGLang reports log-probabilities natively, so that
+   backend needs no counterpart. A question of 2 to 26 options is one page, the page line
+   is not rendered, no normalisation is applied and the pooled array is that one branch's
+   logits, so its answer is byte-for-byte what it was before pages existed — checked in
+   [results/large-choice.md](results/large-choice.md). The ceiling is 256 options.
+   Pages are cut *after* the order is permuted, so two orders group the options
+   differently and an option never faces the same 25 rivals twice.
+
+   Training, calibration fitting and `reflex.eval` still assume one branch is one full
+   distribution, so they take questions of at most 26 options. The serving path is what
+   pages.
 4. **Two option orders, averaged** (`prompt.distinct_orders`, `readout.merge_branches`).
    A choice or score question is rendered in `permutations` *distinct* option orders: the
    identity order first, then distinct shuffles. A yes/no question's second order is
@@ -324,7 +346,7 @@ fetched from the Hugging Face hub and cached by the browser.
 
 | | Jev | reflex (today) |
 |---|---|---|
-| choice cardinality | 255 | 26 (single-token letter labels) |
+| choice cardinality | 255 | 256 (paged, 26 letter labels per page) |
 | score levels | 2–10 | 2–10 |
 | backbone | undisclosed (~10B active, MoE suspected) | any HF causal / image-text LM; Qwen3.5-4B default (hybrid linear attention, native vision) |
 | images | ? | yes, in state, cached with the prefix (VL checkpoints) |

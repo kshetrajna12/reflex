@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 
 from reflex.prompt import Branch, PromptFormat, build_branches
-from reflex.readout import Calibration, merge_branches, softmax
+from reflex.readout import Calibration, group_results, merge_branches, softmax
 
 PREFIX_KEYS = {"system_prompt", "state_heading"}
 
@@ -55,15 +55,17 @@ def variant_formats(base: PromptFormat, variants: list[dict]) -> list[PromptForm
 def disagreement(
     results: list[tuple[Branch, np.ndarray]], cal: Calibration, kind: str, state_tokens: int = 0
 ) -> float:
-    """Mean total-variation distance between each branch's distribution and their mean:
-    0 = every wording and order agrees, 1 = complete scatter."""
-    if len(results) < 2:
+    """Mean total-variation distance between each reading's distribution and their mean:
+    0 = every wording and order agrees, 1 = complete scatter. A reading is one option
+    order of one wording, which is one branch unless the choice was split into pages."""
+    groups = group_results(results)
+    if len(groups) < 2:
         return 0.0
-    keys = list(results[0][0].keys)
+    keys = list(groups[0][0])
     rows = []
-    for br, logits in results:
+    for br_keys, logits in groups:
         p = softmax(logits, cal.t(kind, logits, state_tokens))
-        by_key = dict(zip(br.keys, p))
+        by_key = dict(zip(br_keys, p))
         rows.append(np.array([by_key[k] for k in keys]))
     m = np.stack(rows)
     mean = m.mean(0)

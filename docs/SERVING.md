@@ -12,6 +12,7 @@ configuration on a rented GPU.
 | adapter | none. The frozen model with reflex's default prompt scores best on held-out external data. `kshetrajna12/reflex-qwen3.5-4b-lora` is the earlier LoRA, superseded (its model card says so) and still servable with `--adapter` |
 | calibration | none; temperature 1 |
 | option orders | two distinct orders per question, averaged (`permutations: 2`) |
+| choice cardinality | 2 to 256 options. Past 26 the options are shown as pages of 26 in the same pass and read as one distribution ([results/large-choice.md](results/large-choice.md)); `score` takes 2 to 10 levels |
 | reflex commit | whatever the `stable` tag points at; `serving/stable.json` there is the configuration |
 | endpoint | `POST /v1/systemone`, TypeSafe-compatible; `model` may be omitted |
 | GPU | any CUDA GPU with ≥ 16 GB (RTX PRO 4500 32 GB, A40, L4 all fine); ~9 GB weights |

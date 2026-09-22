@@ -20,10 +20,18 @@ The prefix is tokenized *once* and the branches are tokenized separately, so the
 prefix token ids are byte-identical across branches and can be cached / shared.
 The model never generates: we read next-token logits at the end of each branch and
 restrict them to the label tokens (A/B/C…; or Yes/No with the "yesno" readout).
+
+There are only 26 single-letter labels, so a choice with more options is split into
+**pages** of at most 26, each page a branch of its own carrying a line that says which
+slice of the options it shows. `Branch.group` ties the pages of one option order back
+together; `readout.merge_branches` reads them as a single distribution. Pages are cut
+*after* the order is permuted, so two orders of the same question page differently and
+an option that shared a page with its rival in one order does not in the other.
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 import random
 import string
@@ -44,6 +52,7 @@ SYSTEM_PROMPT = (
 )
 
 LETTERS = string.ascii_uppercase  # A..Z
+PAGE_SIZE = len(LETTERS)  # options per branch: one single-token letter label each
 YES, NO = "Yes", "No"
 
 
@@ -56,9 +65,17 @@ def render_text(x: Text | None) -> str:
     return json.dumps(x, ensure_ascii=False, indent=2)
 
 
+_GROUPS = itertools.count()  # opaque ids; only equality inside one request matters
+
+
 @dataclass
 class Branch:
-    """One isolated question branch: text + which label tokens to read out."""
+    """One isolated question branch: text + which label tokens to read out.
+
+    A branch shows at most `PAGE_SIZE` options. A question with more is split over
+    several branches that share a `group`: together they are one reading of the
+    question, and `readout.merge_branches` softmaxes over their pooled labels.
+    """
 
     qid: str
     kind: str  # "noul" | "choice" | "score"
@@ -67,6 +84,9 @@ class Branch:
     # For choice/score: option keys (choice) or level indices (score) in prompt order,
     # i.e. keys[i] is what labels[i] refers to. Lets us undo permutations.
     keys: list[Any] = field(default_factory=list)
+    # Pages of one option order share a group id; `n_pages` is how many there are.
+    group: int = field(default_factory=lambda: next(_GROUPS))
+    n_pages: int = 1
 
 
 # Every piece of instruction wording the model sees, as named components. A prompt
@@ -82,6 +102,7 @@ DEFAULT_TEXTS = {
     "noul_true_default": "The statement is true.",
     "noul_false_default": "The statement is false.",
     "score_level_prefix": "(level {i} of {n})",
+    "choice_page_note": "Options {a}-{b} of {n}; the other options are shown separately.",
     # "yesno" reads the Yes/No tokens; "letters" presents yes/no as a lettered pair (A/B)
     "noul_readout": "letters",
 }
@@ -148,24 +169,51 @@ class PromptFormat:
 
 
 def _options_block(
-    instructions: Text, labelled: list[tuple[str, str]], ask: str, fmt: PromptFormat | None = None
+    instructions: Text,
+    labelled: list[tuple[str, str]],
+    ask: str,
+    fmt: PromptFormat | None = None,
+    note: str = "",
 ) -> str:
     qh = fmt.t("question_heading") if fmt else DEFAULT_TEXTS["question_heading"]
     oh = fmt.t("options_heading") if fmt else DEFAULT_TEXTS["options_heading"]
     lines = [f"{qh}\n{render_text(instructions)}\n", oh]
+    if note:
+        lines.append(note)
     for label, desc in labelled:
         lines.append(f"{label}. {desc}" if desc else f"{label}.")
     lines.append(f"\n{ask}\n")
     return "\n".join(lines)
 
 
-def _compact_body(instructions: Text, labelled: list[tuple[str, str]]) -> str:
+def _compact_body(instructions: Text, labelled: list[tuple[str, str]], note: str = "") -> str:
     """Close the JSON object opened by the compact prefix: question + lettered options."""
-    payload = {
-        "question": instructions,
-        "options": [{"letter": lab, "text": desc} for lab, desc in labelled],
-    }
+    payload: dict[str, Any] = {"question": instructions}
+    if note:
+        payload["note"] = note
+    payload["options"] = [{"letter": lab, "text": desc} for lab, desc in labelled]
     return json.dumps(payload, ensure_ascii=False)[1:]  # drop "{": the prefix opened it
+
+
+def paginate(order: list[Any]) -> list[list[Any]]:
+    """Cut one option order into pages of at most `PAGE_SIZE`. One page for 2..26 options,
+    which is every question that fitted before pages existed."""
+    return [order[i : i + PAGE_SIZE] for i in range(0, len(order), PAGE_SIZE)]
+
+
+def page_note(fmt: PromptFormat, start: int, count: int, total: int) -> str:
+    """ "Options 27-52 of 151; the other options are shown separately." Empty for a lone
+    page: a question whose options all fit says nothing about pages at all, so its prompt
+    is byte-for-byte the one reflex sent before pages existed. Plain token replacement,
+    because the wording is a `DEFAULT_TEXTS` component an optimiser may rewrite."""
+    if count >= total:
+        return ""
+    return (
+        fmt.t("choice_page_note")
+        .replace("{a}", str(start + 1))
+        .replace("{b}", str(start + count))
+        .replace("{n}", str(total))
+    )
 
 
 def distinct_orders(keys: list[Any], permutations: int, rng: random.Random) -> list[list[Any]]:
@@ -248,10 +296,15 @@ def build_branches(
 
     out: list[Branch] = []
     for order in distinct_orders(keys, permutations, rng):
-        labels = [LETTERS[i] for i in range(len(order))]
-        labelled = [(lab, desc_of(k)) for lab, k in zip(labels, order)]
-        body = _options_block(q.instructions, labelled, ask, fmt)
-        out.append(Branch(qid, kind, fmt.branch(body), labels, order))
+        pages = paginate(order)
+        group, start = next(_GROUPS), 0
+        for page in pages:
+            labels = [LETTERS[i] for i in range(len(page))]
+            labelled = [(lab, desc_of(k)) for lab, k in zip(labels, page)]
+            note = page_note(fmt, start, len(page), len(order))
+            body = _options_block(q.instructions, labelled, ask, fmt, note)
+            out.append(Branch(qid, kind, fmt.branch(body), labels, page, group, len(pages)))
+            start += len(page)
     return out
 
 
@@ -294,9 +347,13 @@ def _build_compact(
         order = list(keys)
         if p > 0:
             rng.shuffle(order)
-        labels = [LETTERS[i] for i in range(len(order))]
-        labelled = [(lab, desc_of(k)) for lab, k in zip(labels, order, strict=True)]
-        out.append(
-            Branch(qid, kind, fmt.branch(_compact_body(q.instructions, labelled)), labels, order)
-        )
+        pages = paginate(order)
+        group, start = next(_GROUPS), 0
+        for page in pages:
+            labels = [LETTERS[i] for i in range(len(page))]
+            labelled = [(lab, desc_of(k)) for lab, k in zip(labels, page, strict=True)]
+            note = page_note(fmt, start, len(page), len(order))
+            body = fmt.branch(_compact_body(q.instructions, labelled, note))
+            out.append(Branch(qid, kind, body, labels, page, group, len(pages)))
+            start += len(page)
     return out
