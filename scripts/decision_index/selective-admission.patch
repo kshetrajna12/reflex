@@ -1,0 +1,110 @@
+--- upstream/src/reflex/backends/sglang.py
++++ candidate/src/reflex/backends/sglang.py
+@@ -47,6 +47,8 @@
+ import hashlib
+ import logging
+ import math
++import os
++import time
+ import threading
+ from collections import OrderedDict
+ from typing import Any
+@@ -127,6 +129,27 @@
+         self._thread.start()
+         self._ready.wait()
+         self._slots = asyncio.Semaphore(max_concurrent_calls)
++        # Experimental per-replica admission policy, owned by the single I/O loop.
++        self._routing_policy = os.environ.get("REFLEX_EXPERIMENT_ROUTING", "shape")
++        limit = int(os.environ.get("REFLEX_EXPERIMENT_MAX_REQUESTS", "0"))
++        if self._routing_policy not in {"shape", "idle", "shared", "pressure"} or limit < 0:
++            raise ValueError("invalid experimental routing settings")
++        self._request_slots = asyncio.Semaphore(limit) if limit else None
++        self._pending_requests = 0
++        self._heavy_requests = 0
++        self._active_requests = 0
++        self._route_counts = {"warm": 0, "direct": 0, "shared": 0}
++        self._queue_ms = []
++
++    def routing_snapshot(self):
++        async def snapshot():
++            values = self._queue_ms
++            self._queue_ms = []
++            return {"policy": self._routing_policy, "routes": dict(self._route_counts),
++                    "active": self._active_requests, "pending": self._pending_requests,
++                    "heavy": self._heavy_requests,
++                    "queue_ms": values}
++        return asyncio.run_coroutine_threadsafe(snapshot(), self._loop).result(timeout=5)
+ 
+     # ------------------------------------------------------------------ event loop thread
+     def _run_loop(self) -> None:
+@@ -226,9 +249,54 @@
+     async def _run(
+         self, prefix_ids: list[int], branches: list[Branch], branch_ids: list[list[int]], warm: bool
+     ) -> tuple[list[np.ndarray], int]:
+-        """Warm the radix cache with the prefix, then ask for every branch in one call."""
++        """Register load before admission; always release accounting on failure."""
++        self._pending_requests += 1
++        heavy = not warm and (len(prefix_ids) > 256 or len(branches) > 4)
++        self._heavy_requests += int(heavy)
++        start = time.perf_counter()
++        # Only duplicate-prefill work needs the extra admission bound. Single
++        # branches, warm requests and shared-prefix requests retain the call bound.
++        gated = not warm and not heavy and len(branches) > 1
++        try:
++            if self._request_slots is None or not gated or self._under_heavy_load():
++                return await self._run_admitted(prefix_ids, branches, branch_ids, warm, start)
++            await self._request_slots.acquire()
++            try:
++                # Long/wide work may have arrived while this request was queued.
++                if not self._under_heavy_load():
++                    return await self._run_admitted(prefix_ids, branches, branch_ids, warm, start)
++            finally:
++                self._request_slots.release()
++            return await self._run_admitted(prefix_ids, branches, branch_ids, warm, start)
++        finally:
++            self._heavy_requests -= int(heavy)
++            self._pending_requests -= 1
++
++    def _under_heavy_load(self):
++        return self._routing_policy == "pressure" and self._heavy_requests > 0
++
++    async def _run_admitted(self, prefix_ids, branches, branch_ids, warm, start):
++        self._active_requests += 1
++        self._queue_ms.append((time.perf_counter() - start) * 1000)
++        # Keep diagnostic memory bounded even if no scraper is present.
++        if len(self._queue_ms) > 65536:
++            del self._queue_ms[:32768]
++        eligible = len(branches) == 1 or (len(prefix_ids) <= 256 and len(branches) <= 4)
++        direct = eligible and self._routing_policy != "shared"
++        if self._routing_policy == "idle" and len(branches) > 1:
++            direct = direct and self._pending_requests == 1
++        if len(branches) > 1 and self._under_heavy_load():
++            direct = False
++        prepare = not warm and not direct
++        self._route_counts["warm" if warm else "shared" if prepare else "direct"] += 1
++        try:
++            return await self._run_selected(prefix_ids, branches, branch_ids, prepare)
++        finally:
++            self._active_requests -= 1
++
++    async def _run_selected(self, prefix_ids, branches, branch_ids, prepare):
+         prompt_tokens = 0
+-        if not warm:
++        if prepare:
+             # The branches of one batch are admitted together, so without this they would
+             # each prefill the whole state instead of extending it. Measured in
+             # docs/results/sglang-batched.md: it is what keeps a cold request at one
+--- upstream/src/reflex/server.py
++++ candidate/src/reflex/server.py
+@@ -60,6 +60,11 @@
+             "strategy": engine.strategy,
+             "device": str(engine.device),
+         }
++
++    if hasattr(engine, "routing_snapshot"):
++        @app.get("/v1/experiment-routing")
++        def routing():
++            return engine.routing_snapshot()
+ 
+     @app.get("/v1/models")
+     def models():

@@ -1,0 +1,30 @@
+{
+  "engine": "decision_index.engines.reflex_http:ReflexHttpSystemOne",
+  "engine_options": {
+    "base_url": "https://reflex-27b-p2-pw1-17298.c-09.d-01.centml.com",
+    "model": "reflex-27b",
+    "extra": {
+      "permutations": 2
+    },
+    "timeout": 600
+  },
+  "model_source": {
+    "kind": "http",
+    "base_url": "https://reflex-27b-p2-pw1-17298.c-09.d-01.centml.com",
+    "model": "reflex-27b",
+    "request_options": {
+      "permutations": 2
+    },
+    "policy": "Unmodified state and questions sent as one /v1/systemone request; explicit capacity rejections (HTTP 422 with a known marker) are unsupported, other failures are errors."
+  },
+  "loaded_seconds": 0.1990494169294834,
+  "frozen_corpus_sha256": "04baa0c9115085fa5bdaba2fbe72c7f6ce755578793794014f1a479650a0fc8a",
+  "rows_path": "/private/tmp/decision-index/suite/selected-rows.jsonl.gz",
+  "runner_sha256": "fac268fc460a2a3470f52ee9e785fd81b37864cace132ac9e6284ede806258b8",
+  "latency": "HTTP request wall time against the configured /v1/systemone endpoint, including server-side prompt construction and inference; excludes server startup.",
+  "parallel": {
+    "workers": 32,
+    "shard_policy": "sha256(run_id)[0:8] modulo workers",
+    "parallel_runner_sha256": "fd53261037f9bdf1d8264c4b227aefa776454de9785b74e48fca0a7cccbebd5e"
+  }
+}

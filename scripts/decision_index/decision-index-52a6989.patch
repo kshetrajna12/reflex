@@ -1,0 +1,507 @@
+diff --git a/decision_index/cli.py b/decision_index/cli.py
+index d07e77a..8e56b6a 100644
+--- a/decision_index/cli.py
++++ b/decision_index/cli.py
+@@ -71,7 +71,16 @@ def cmd_run(args):
+         rows = suite.rows_path
+         corpus = suite.verify(strict=not args.no_verify)["sha256"]
+     out = Path(args.out or ("runs/" + args.engine))
+-    print(json.dumps(run(args.engine, engine_options(args), rows, out, limit=args.limit, compact=args.compact, resume=not args.fresh, corpus_sha256=corpus)))
++    options = engine_options(args)
++    if args.workers == 1:
++        result = run(args.engine, options, rows, out, limit=args.limit, compact=args.compact, resume=not args.fresh, corpus_sha256=corpus)
++    else:
++        if args.limit:
++            raise SystemExit("--limit is not supported with --workers; use `suite sample` and pass the sampled --rows file")
++        from decision_index.parallel_runner import run_parallel
++
++        result = run_parallel(args.engine, options, rows, out, workers=args.workers, compact=args.compact, resume=not args.fresh, corpus_sha256=corpus)
++    print(json.dumps(result))
+ 
+ 
+ def cmd_score(args):
+@@ -93,7 +102,15 @@ def cmd_pipeline(args):
+     corpus = suite.verify(strict=not args.no_verify)["sha256"]
+     out = Path(args.out or ("runs/" + args.engine))
+     rows = Path(args.rows) if args.rows else suite.rows_path
+-    run(args.engine, engine_options(args), rows, out, limit=args.limit, compact=args.compact, resume=not args.fresh, corpus_sha256=corpus)
++    options = engine_options(args)
++    if args.workers == 1:
++        run(args.engine, options, rows, out, limit=args.limit, compact=args.compact, resume=not args.fresh, corpus_sha256=corpus)
++    else:
++        if args.limit:
++            raise SystemExit("--limit is not supported with --workers; use `suite sample` and pass the sampled --rows file")
++        from decision_index.parallel_runner import run_parallel
++
++        run_parallel(args.engine, options, rows, out, workers=args.workers, compact=args.compact, resume=not args.fresh, corpus_sha256=corpus)
+     scores = score_run(suite, out / "results.jsonl", args.engine, out)
+     print(json.dumps({"decision_index": scores["decision_index"], "scores": scores["scores"], "complete": scores["complete"]}, indent=2))
+     if args.upload:
+@@ -169,6 +186,7 @@ def build_parser():
+     p.add_argument("--limit", type=int)
+     p.add_argument("--compact", action="store_true", help="omit payload and raw_output from results rows")
+     p.add_argument("--fresh", action="store_true", help="ignore an existing results.jsonl")
++    p.add_argument("--workers", type=int, choices=(1, 2, 4, 8, 16, 32), default=1, help="deterministic HTTP shards to run concurrently")
+     p.set_defaults(func=cmd_run)
+ 
+     p = sub.add_parser("score", help="score a results.jsonl and compute the Decision Index")
+@@ -187,6 +205,7 @@ def build_parser():
+     p.add_argument("--limit", type=int)
+     p.add_argument("--compact", action="store_true")
+     p.add_argument("--fresh", action="store_true")
++    p.add_argument("--workers", type=int, choices=(1, 2, 4, 8, 16, 32), default=1, help="deterministic HTTP shards to run concurrently")
+     p.add_argument("--upload", help="Hub dataset repo to receive results and scores")
+     p.add_argument("--upload-path", default="")
+     p.add_argument("--public", action="store_true")
+diff --git a/decision_index/engines/reflex_http.py b/decision_index/engines/reflex_http.py
+new file mode 100644
+index 0000000..bdec1b5
+--- /dev/null
++++ b/decision_index/engines/reflex_http.py
+@@ -0,0 +1,40 @@
++"""Decision Index HTTP adapter with Reflex capacity errors classified correctly.
++
++This keeps the canonical HTTP payload and response behavior.  The upstream generic
++adapter predates Reflex's exact validation message ("choice supports at most 26
++options"), so without this small adapter those declared capacity limits are recorded as
++retryable errors instead of terminal unsupported rows.  Both statuses score as wrong;
++the distinction matters for clean reporting and resume behavior.
++"""
++
++from decision_index.engines.base import Unsupported
++from decision_index.engines.http import CAPACITY_MARKERS, HttpSystemOne
++
++
++REFLEX_CAPACITY_MARKERS = CAPACITY_MARKERS + (
++    "choice supports at most",
++    "question branch too long",
++)
++
++
++class ReflexHttpSystemOne(HttpSystemOne):
++    name = "reflex-http"
++
++    def __call__(self, state, questions):
++        response = self.client.post(
++            "/v1/systemone",
++            json={
++                "model": self.model,
++                "state": state,
++                "questions": questions,
++                **self.extra,
++            },
++        )
++        if response.status_code in (400, 413, 422):
++            message = response.text
++            if any(marker in message for marker in REFLEX_CAPACITY_MARKERS):
++                raise Unsupported(message)
++        response.raise_for_status()
++        raw = response.json()
++        return {key: value for key, value in raw.items() if key != "evaluation_trace"}, raw
++
+diff --git a/decision_index/parallel_runner.py b/decision_index/parallel_runner.py
+new file mode 100644
+index 0000000..79ff53c
+--- /dev/null
++++ b/decision_index/parallel_runner.py
+@@ -0,0 +1,271 @@
++import collections
++import gzip
++import hashlib
++import json
++import threading
++import time
++from concurrent.futures import ThreadPoolExecutor, as_completed
++from pathlib import Path
++
++from decision_index.runner import run
++from decision_index.suite.io import atomic_json, dumps, read_jsonl, sha256_file
++
++
++def _shard_number(run_id, workers):
++    digest = hashlib.sha256(run_id.encode("utf-8")).digest()
++    return int.from_bytes(digest[:8], "big") % workers
++
++
++def _layout(out, workers):
++    root = out / "_parallel"
++    return root, [root / f"shard-{i:03d}" for i in range(workers)]
++
++
++def _partition(rows_path, root, shard_dirs, expected):
++    root.mkdir(parents=True, exist_ok=True)
++    tmp_paths = [d.with_suffix(".rows.jsonl.gz.tmp") for d in shard_dirs]
++    final_paths = [d.with_suffix(".rows.jsonl.gz") for d in shard_dirs]
++    files = []
++    counts = [0] * len(shard_dirs)
++    try:
++        for path in tmp_paths:
++            files.append(gzip.open(path, "wt", encoding="utf-8", compresslevel=1))
++        for row in read_jsonl(rows_path):
++            run_id = row["_evaluation"]["run_id"]
++            shard = _shard_number(run_id, len(shard_dirs))
++            files[shard].write(dumps(row) + "\n")
++            counts[shard] += 1
++    finally:
++        for f in files:
++            f.close()
++    for tmp, final in zip(tmp_paths, final_paths):
++        tmp.replace(final)
++    manifest = {**expected, "rows": sum(counts), "rows_per_shard": counts, "seeded_from_results": False}
++    atomic_json(root / "manifest.json", manifest)
++    return manifest, final_paths
++
++
++def _prepare(rows_path, out, workers, engine_name, engine_options, resume):
++    root, shard_dirs = _layout(out, workers)
++    expected = {
++        "version": 1,
++        "workers": workers,
++        "shard_policy": "sha256(run_id)[0:8] modulo workers",
++        "source_rows_sha256": sha256_file(rows_path),
++        "engine": engine_name,
++        "engine_options": engine_options,
++    }
++    manifest_path = root / "manifest.json"
++    if manifest_path.exists():
++        if not resume:
++            raise ValueError("parallel --fresh requires a new output directory")
++        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
++        for key, value in expected.items():
++            if manifest.get(key) != value:
++                raise ValueError(
++                    f"parallel resume mismatch for {key}: "
++                    f"existing={manifest.get(key)!r}, requested={value!r}; use a new output directory"
++                )
++        shard_rows = [d.with_suffix(".rows.jsonl.gz") for d in shard_dirs]
++        missing = [str(p) for p in shard_rows if not p.exists()]
++        if missing:
++            raise FileNotFoundError(f"parallel shard rows are missing: {missing}")
++    else:
++        if root.exists() and any(root.iterdir()):
++            leftovers = list(root.iterdir())
++            if all(path.is_file() and ".rows.jsonl.gz" in path.name for path in leftovers):
++                for path in leftovers:
++                    path.unlink()
++            else:
++                raise ValueError(f"incomplete parallel state in {root}; use a new output directory")
++        if not resume and (out / "results.jsonl").exists():
++            raise ValueError("parallel --fresh requires an output directory without results.jsonl")
++        manifest, shard_rows = _partition(rows_path, root, shard_dirs, expected)
++
++    for directory in shard_dirs:
++        directory.mkdir(parents=True, exist_ok=True)
++
++    # A serial run can be continued in parallel without losing completed work.
++    # Seed exactly once; subsequent resumes use the shard checkpoints directly.
++    results_path = out / "results.jsonl"
++    if resume and results_path.exists() and not manifest.get("seeded_from_results"):
++        environment_path = out / "environment.json"
++        if environment_path.exists():
++            environment = json.loads(environment_path.read_text(encoding="utf-8"))
++            if environment.get("engine") != engine_name or environment.get("engine_options") != engine_options:
++                raise ValueError("existing results were produced by different engine options; use a new output directory")
++        handles = [(directory / "results.jsonl").open("a", encoding="utf-8") for directory in shard_dirs]
++        try:
++            for result in read_jsonl(results_path, complete_lines_only=True):
++                if result.get("engine") != engine_name:
++                    raise ValueError("existing results contain a different engine; use a new output directory")
++                shard = _shard_number(result["run_id"], workers)
++                handles[shard].write(dumps(result) + "\n")
++        finally:
++            for handle in handles:
++                handle.close()
++        manifest["seeded_from_results"] = True
++        atomic_json(manifest_path, manifest)
++    elif not manifest.get("seeded_from_results"):
++        manifest["seeded_from_results"] = True
++        atomic_json(manifest_path, manifest)
++    return root, shard_dirs, shard_rows, manifest
++
++
++def _has_pending(rows_path, results_path):
++    previous = {}
++    if results_path.exists():
++        for result in read_jsonl(results_path, complete_lines_only=True):
++            previous[result["run_id"]] = result["status"]
++    return any(
++        previous.get(row["_evaluation"]["run_id"]) in (None, "error")
++        for row in read_jsonl(rows_path)
++    )
++
++
++def _normalize_shard(rows_path, results_path, normalized_path):
++    latest = {}
++    if results_path.exists():
++        with results_path.open("r", encoding="utf-8") as source:
++            for line in source:
++                if not line.endswith("\n"):
++                    break
++                if line.strip():
++                    result = json.loads(line)
++                    latest[result["run_id"]] = line
++    with normalized_path.open("w", encoding="utf-8") as target:
++        for row in read_jsonl(rows_path):
++            line = latest.get(row["_evaluation"]["run_id"])
++            if line is not None:
++                target.write(line)
++
++
++def _merge(rows_path, out, root, shard_dirs, shard_rows, workers):
++    normalized = [root / f"shard-{i:03d}.canonical.jsonl" for i in range(workers)]
++    for rows, directory, target in zip(shard_rows, shard_dirs, normalized):
++        _normalize_shard(rows, directory / "results.jsonl", target)
++
++    handles = [path.open("r", encoding="utf-8") for path in normalized]
++    current = [None] * workers
++    counts = collections.Counter()
++    results_path = out / "results.jsonl"
++    tmp = results_path.with_suffix(results_path.suffix + ".tmp")
++    try:
++        with tmp.open("w", encoding="utf-8") as target:
++            for row in read_jsonl(rows_path):
++                run_id = row["_evaluation"]["run_id"]
++                shard = _shard_number(run_id, workers)
++                if current[shard] is None:
++                    line = handles[shard].readline()
++                    current[shard] = (json.loads(line), line) if line else False
++                item = current[shard]
++                if item and item[0]["run_id"] == run_id:
++                    target.write(item[1])
++                    counts[item[0]["status"]] += 1
++                    current[shard] = None
++        tmp.replace(results_path)
++    finally:
++        for handle in handles:
++            handle.close()
++        for path in normalized:
++            path.unlink(missing_ok=True)
++        tmp.unlink(missing_ok=True)
++    return counts
++
++
++def run_parallel(
++    engine_name,
++    engine_options,
++    rows_path,
++    out_dir,
++    workers,
++    compact=False,
++    resume=True,
++    warm=True,
++    seed=20260919,
++    corpus_sha256=None,
++    halt_on_device_error=True,
++    log=print,
++):
++    """Run deterministic serial shards concurrently, then merge canonical results.
++
++    Each shard uses the official runner unchanged.  Its per-request timing therefore
++    remains the wall time measured around the engine call; queueing and merge time are
++    not added to request latency.
++    """
++    workers = int(workers)
++    if workers < 2:
++        raise ValueError("run_parallel requires at least two workers")
++    rows_path = Path(rows_path)
++    out = Path(out_dir)
++    out.mkdir(parents=True, exist_ok=True)
++    root, shard_dirs, shard_rows, manifest = _prepare(
++        rows_path, out, workers, engine_name, engine_options, resume
++    )
++    lock = threading.Lock()
++
++    def worker(shard):
++        rows = shard_rows[shard]
++        directory = shard_dirs[shard]
++        if not _has_pending(rows, directory / "results.jsonl"):
++            return {"event": "complete", "completed": manifest["rows_per_shard"][shard], "counts": {}}
++
++        def worker_log(message):
++            with lock:
++                log(message)
++
++        return run(
++            engine_name,
++            engine_options,
++            rows,
++            directory,
++            compact=compact,
++            resume=True,
++            warm=warm,
++            seed=seed + shard,
++            corpus_sha256=corpus_sha256,
++            halt_on_device_error=halt_on_device_error,
++            log=worker_log,
++        )
++
++    started = time.perf_counter()
++    atomic_json(
++        out / "status.json",
++        {"event": "running", "engine": engine_name, "workers": workers, "rows": manifest["rows"]},
++        indent=None,
++    )
++    failures = []
++    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="decision-index") as executor:
++        futures = {executor.submit(worker, shard): shard for shard in range(workers)}
++        for future in as_completed(futures):
++            try:
++                future.result()
++            except Exception as exc:
++                failures.append((futures[future], exc))
++
++    counts = _merge(rows_path, out, root, shard_dirs, shard_rows, workers)
++    environment_source = next((d / "environment.json" for d in shard_dirs if (d / "environment.json").exists()), None)
++    if environment_source:
++        environment = json.loads(environment_source.read_text(encoding="utf-8"))
++        environment["rows_path"] = str(rows_path)
++        environment["parallel"] = {
++            "workers": workers,
++            "shard_policy": manifest["shard_policy"],
++            "parallel_runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
++        }
++        atomic_json(out / "environment.json", environment)
++    status = {
++        "event": "failed" if failures else "complete",
++        "engine": engine_name,
++        "workers": workers,
++        "completed": sum(counts.values()),
++        "counts": dict(counts),
++        "elapsed_seconds": round(time.perf_counter() - started, 1),
++    }
++    if failures:
++        status["errors"] = [{"shard": shard, "error": str(exc)} for shard, exc in failures]
++    atomic_json(out / "status.json", status, indent=None)
++    log(dumps(status))
++    if failures:
++        raise RuntimeError(f"{len(failures)} parallel shard(s) failed; checkpoints and merged results were preserved") from failures[0][1]
++    return status
+diff --git a/decision_index/suite/build/acquire.py b/decision_index/suite/build/acquire.py
+index 07ee7f1..4bc32c9 100644
+--- a/decision_index/suite/build/acquire.py
++++ b/decision_index/suite/build/acquire.py
+@@ -32,7 +32,6 @@ GIT_FLAT = {
+     "vast": ("https://github.com/emilyallaway/zero-shot-stance.git", "e7c4775182b184730f350995f8260579c9e066fe", ["data/VAST"]),
+ }
+ HF = {
+-    "raw/banking77": ("PolyAI/banking77", "90d4e2ee5521c04fc1488f065b8b083658768c57", ["test.csv", "categories.json"]),
+     "raw/routerbench": ("withmartian/routerbench", "784021482c3f320c6619ed4b3bb3b41a21424fcb", ["routerbench_0shot.pkl", "routerbench_5shot.pkl"]),
+     "raw/bright": ("xlangai/BRIGHT", "3066d29c9651a576c8aba4832d249807b181ecae", ["examples/*.parquet", "documents/*.parquet"]),
+     "raw/toolret_queries": ("mangopy/ToolRet-Queries", "b8c76ad3349ff17497b6bdb28bb5b8f61a0f6445", ["*/*.parquet"]),
+@@ -40,12 +39,15 @@ HF = {
+     "raw/hle": ("cais/hle", "5a81a4c7271a2a2a312b9a690f0c2fde837e4c29", ["data/test-00000-of-00001.parquet"]),
+     "raw/anli": ("facebook/anli", "8e4813d81f46d313dac7892e1c28076917cfcdf9", ["plain_text/test_*.parquet"]),
+     "data/sources/mmlu": ("cais/mmlu", "c30699e8356da336a370243923dbaf21066bb9fe", ["all/test-00000-of-00001.parquet"]),
+-    "data/sources/arc": ("allenai/ai2_arc", None, ["ARC-Easy/test-00000-of-00001.parquet", "ARC-Challenge/test-00000-of-00001.parquet"]),
++    "data/sources/arc": ("allenai/ai2_arc", "210d026faf9955653af8916fad021475a3f00453", ["ARC-Easy/test-00000-of-00001.parquet", "ARC-Challenge/test-00000-of-00001.parquet"]),
+     "data/sources/winogrande": ("allenai/winogrande", "01e74176c63542e6b0bcb004dcdea22d94fb67b5", ["winogrande_xl/validation-00000-of-00001.parquet"]),
+     "data/sources/hellaswag": ("Rowan/hellaswag", "218ec52e09a7e7462a5400043bb9a69a41d06b76", ["data/validation-00000-of-00001.parquet"]),
+     "data/sources/gsm8k": ("openai/gsm8k", "740312add88f781978c0658806c59bc2815b9866", ["main/test-00000-of-00001.parquet"]),
+ }
+ HTTP = {
++    # PolyAI/banking77@90d4e2e is a loader-only Hub revision; these are its official upstream files.
++    "raw/banking77/test.csv": ("https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/9d081458ff52e53cf7e848f414e6e9344e4e6696/banking_data/test.csv", "d12d6e3bc4c3103966ae786dc435913c0c563dfa328f5a3646d0e62cfeeb474d"),
++    "raw/banking77/categories.json": ("https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/9d081458ff52e53cf7e848f414e6e9344e4e6696/banking_data/categories.json", "53261da888122daf2d120d925458631d9619e15d82e56052e7a42e535ce32b63"),
+     "raw/downloads/BPoMP_p1.json": ("https://zenodo.org/api/records/7299879/files/BPoMP_datasets_p1_out_of_3.json/content", "2500e828fd3b38c43f869ce3c1d2defd991adf340ecb5757c4e9097d7d7a2925"),
+     "raw/downloads/BPoMP_p2.json": ("https://zenodo.org/api/records/7299879/files/BPoMP_datasets_p2_out_of_3.json/content", "ee17bc0fad97f58da19186d21773bb6b85472aacedf1400865358251140270b5"),
+     "raw/downloads/BPoMP_p3.json": ("https://zenodo.org/api/records/7299879/files/BPoMP_datasets_p3_out_of_3.json/content", "cc0b75645a28cce5a6fe15bd2dfe7878a6da4a0bc6b5842dfc0a1b677ec99f3b"),
+@@ -53,6 +55,7 @@ HTTP = {
+     "raw/downloads/chessbench-test-action-value.bag": ("https://storage.googleapis.com/searchless_chess/data/test/action_value_data.bag", "5f73aac8f60e31734cdbf276ba3fca8d5ba5cb6171ba600e31af4f36327986b0"),
+     "raw/downloads/humicroedit-full.zip": ("https://cs.rochester.edu/u/nhossain/semeval-2020-task-7-dataset.zip", "12a6cbf28c8b698ad80be42a65ac867b57e4c71662eedab607805e167ba791ab"),
+     "raw/clinc150/data_full.json": ("https://raw.githubusercontent.com/clinc/oos-eval/master/data/data_full.json", "36923c3705a59e08fe9c3883d8bc2dd966ef93e22cb78ac41171782a698d56e0"),
++    "raw/repos/habermas_machine/hm_all_candidate_comparisons.parquet": ("https://storage.googleapis.com/habermas_machine/datasets/hm_all_candidate_comparisons.parquet", "7cf8d5ce3fce8853b36f0ffe1158424f7813867e422e313db4df0a5f9e03e4a4"),
+     "data/sources/gpqa/dataset.zip": ("https://github.com/idavidrein/gpqa/raw/main/dataset.zip", "461ae7329f15a3e35f8184d2dac24b990f34fdf12f366ca4062d8e6638cd08dc"),
+ }
+ ESCI_LFS = {
+@@ -60,7 +63,7 @@ ESCI_LFS = {
+     "shopping_queries_dataset/shopping_queries_dataset_products.parquet": "25124442d064d64b26f74082d6fa09438d679efc0c18",
+ }
+ NEEDS = {
+-    1: ["git:bfcl"], 2: ["git:toolret", "hf:raw/toolret_queries", "hf:raw/toolret_tools"], 3: ["git:apibank"], 4: ["hf:raw/banking77"],
++    1: ["git:bfcl"], 2: ["git:toolret", "hf:raw/toolret_queries", "hf:raw/toolret_tools"], 3: ["git:apibank"], 4: ["http:raw/banking77/test.csv", "http:raw/banking77/categories.json"],
+     5: ["http:raw/clinc150/data_full.json"], 6: ["hf:raw/routerbench"], 9: [], 10: ["git:sgd"], 11: ["git:contractnli"], 12: ["hf:raw/anli"],
+     20: ["http:raw/downloads/BPoMP_p1.json", "http:raw/downloads/BPoMP_p2.json", "http:raw/downloads/BPoMP_p3.json"],
+     21: ["http:raw/downloads/humicroedit-full.zip"], 22: ["git:pop909cl"], 23: ["http:raw/downloads/cfcolor.zip"],
+@@ -69,7 +72,7 @@ NEEDS = {
+     31: ["git:searchless_chess", "http:raw/downloads/chessbench-test-action-value.bag"], 32: ["gitflat:musr"], 33: ["git:sata"],
+     34: ["gitflat:simplebench"], 36: ["hf:raw/bright"], 37: ["git:esci"], 38: ["git:acos"], 39: ["git:finentity"], 40: ["git:isarcasm"],
+     41: ["gitflat:vast"], 42: ["git:nli4ct"], 43: ["git:cruxeval"], 44: ["gitflat:cladder"], 45: ["hf:raw/hle"],
+-    48: ["git:forecastbench-datasets"], 50: ["git:habermas_machine"],
++    48: ["git:forecastbench-datasets"], 50: ["git:habermas_machine", "http:raw/repos/habermas_machine/hm_all_candidate_comparisons.parquet"],
+ }
+ 
+ 
+@@ -113,6 +116,11 @@ def hf_fetch(dest, repo, revision, patterns, log=print):
+     snapshot_download(repo, repo_type="dataset", revision=revision, allow_patterns=patterns, local_dir=str(dest))
+ 
+ 
++def local_path(layout, key):
++    """Resolve paths written in the lab layout used by the frozen suite."""
++    return layout.suite / key if key.startswith("raw/") else layout.root / key
++
++
+ def acquire(layout, numbers=None, log=print):
+     numbers = sorted(NEEDS) if numbers is None else numbers
+     done = set()
+@@ -136,10 +144,10 @@ def acquire(layout, numbers=None, log=print):
+                 git_fetch(layout.raw / key, url, rev, sparse, log)
+             elif kind == "hf":
+                 repo, rev, patterns = HF[key]
+-                hf_fetch(layout.root / key, repo, rev, patterns, log)
++                hf_fetch(local_path(layout, key), repo, rev, patterns, log)
+             elif kind == "http":
+                 url, sha = HTTP[key]
+-                http_fetch(layout.root / key, url, sha, log)
++                http_fetch(local_path(layout, key), url, sha, log)
+     if 23 in numbers:
+         release = layout.repos / "cfcolor/release"
+         if not (release / "themeData.mat").exists():
+diff --git a/tests/test_runner.py b/tests/test_runner.py
+index dcf38ce..f69c7dd 100644
+--- a/tests/test_runner.py
++++ b/tests/test_runner.py
+@@ -2,6 +2,7 @@ import gzip
+ import json
+ 
+ from decision_index.runner import run
++from decision_index.parallel_runner import run_parallel
+ from decision_index.scoring.report import load_results
+ 
+ 
+@@ -26,3 +27,36 @@ def test_run_resumes_and_keeps_row_format(tmp_path):
+     keys = {"run_id", "catalog_id", "dataset", "group_id", "track", "source_path", "payload_sha256", "proxy_tokens", "benchmark_origin", "payload", "started_utc", "engine", "status", "response", "raw_output", "completed_utc", "total_wall_ms", "model_request_wall_ms"}
+     assert keys <= set(raw[0])
+     assert (out / "status.json").exists() and (out / "environment.json").exists()
++
++
++def test_parallel_run_is_exact_once_canonical_and_resumable(tmp_path):
++    rows = tmp_path / "rows.jsonl.gz"
++    write_rows(rows, 17)
++    out = tmp_path / "parallel"
++
++    first = run_parallel("random", {"seed": 3}, rows, out, workers=4, warm=False, log=lambda s: None)
++    assert first["completed"] == 17
++    raw = [json.loads(line) for line in (out / "results.jsonl").open()]
++    assert [row["run_id"] for row in raw] == [f"24:x:{i}" for i in range(17)]
++    assert len({row["run_id"] for row in raw}) == 17
++    assert json.loads((out / "environment.json").read_text())["parallel"]["workers"] == 4
++
++    # Removing the merged view simulates interruption after shard checkpoints.
++    (out / "results.jsonl").unlink()
++    resumed = run_parallel("random", {"seed": 3}, rows, out, workers=4, warm=False, log=lambda s: None)
++    assert resumed["completed"] == 17
++    raw = [json.loads(line) for line in (out / "results.jsonl").open()]
++    assert [row["run_id"] for row in raw] == [f"24:x:{i}" for i in range(17)]
++
++
++def test_parallel_run_continues_a_serial_checkpoint(tmp_path):
++    rows = tmp_path / "rows.jsonl.gz"
++    write_rows(rows, 9)
++    out = tmp_path / "serial-to-parallel"
++    run("random", {"seed": 3}, rows, out, limit=3, warm=False, log=lambda s: None)
++
++    result = run_parallel("random", {"seed": 3}, rows, out, workers=2, warm=False, log=lambda s: None)
++    assert result["completed"] == 9
++    raw = [json.loads(line) for line in (out / "results.jsonl").open()]
++    assert [row["run_id"] for row in raw] == [f"24:x:{i}" for i in range(9)]
++    assert len({row["run_id"] for row in raw}) == 9

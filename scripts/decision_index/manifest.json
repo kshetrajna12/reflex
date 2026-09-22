@@ -1,0 +1,67 @@
+{
+  "format": "reflex-decision-index-reproduction-v1",
+  "decision_index": {
+    "repository": "https://github.com/apolinario/decision-index",
+    "commit": "52a698928a9ae5bdf16b75687c903871db29c6e5",
+    "patch_sha256": "2cc138f08d6275121ef279fa1644797dffaa42cb8c78d0a1f1290eab7c6a1a02",
+    "engine": "decision_index.engines.reflex_http:ReflexHttpSystemOne",
+    "workers": 32,
+    "parallel_runner_sha256": "fd53261037f9bdf1d8264c4b227aefa776454de9785b74e48fca0a7cccbebd5e"
+  },
+  "reflex": {
+    "repository": "https://github.com/kshetrajna12/reflex",
+    "commit": "bdfc9c80f0c5ac402b0c09c73539a7d507ee4287",
+    "source_snapshot_sha256": "dada7d1e4ba74d3c1b190b46ce2373a1c17a6c75e96c586c20ef14acc918d37e",
+    "selective_admission_patch_sha256": "a27637f209e8d8522d6b68f3459ec7852bee0706510013a75f2ef270899e63b7",
+    "supervisor_sha256": "df65b05c9a35629d8e7501415eacce2d151d1f65c5bf3633eaac4c78d73d82dd",
+    "permutations": 2,
+    "max_choice_options": 26
+  },
+  "model": {
+    "id": "Qwen/Qwen3.8-27B-FP8",
+    "revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a"
+  },
+  "serving": {
+    "hardware": "NVIDIA H100",
+    "replicas": 8,
+    "replicas_per_gpu": 1,
+    "routing_policy": "pressure",
+    "request_limit": 6,
+    "sglang_image": "lmsysorg/sglang@sha256:b27fce60bc5494c118c4910702812bcfa8cee67abcdd1ff8b0902f21647552f4",
+    "flags": [
+      "--dtype=bfloat16",
+      "--mem-fraction-static=0.85",
+      "--context-length=65536",
+      "--max-running-requests=32",
+      "--max-total-tokens=65536",
+      "--max-mamba-cache-size=320",
+      "--mamba-ssm-dtype=bfloat16",
+      "--mamba-radix-cache-strategy=extra_buffer",
+      "--cuda-graph-max-bs-decode=32",
+      "--chunked-prefill-size=8192",
+      "--attention-backend=fa3"
+    ]
+  },
+  "suite": {
+    "requests": 132422,
+    "uncompressed_sha256": "288d37207a9581187bdf83eada1983aa63de6fc50b0108e2badb229547a57f99",
+    "exclusions_sha256": "331df32d4b719c7db43214d0e5d85859d39c3b2eb7d0b3812214cce150155e81"
+  },
+  "run": {
+    "name": "reflex-27b-p2-full-r8-p32",
+    "ok": 117922,
+    "unsupported": 14500,
+    "errors": 0,
+    "wall_seconds": 4984,
+    "supported_requests_per_second": 23.66,
+    "estimated_gpu_cost_usd_at_2_per_hour": 22.15,
+    "results_jsonl_sha256": "46195fbb8c676ef2c09740ff55fb8416bf32145ee7fc4cff30cd17f4b71dbf7d"
+  },
+  "artifacts": {
+    "benchmark-summary.json": "0d7755e40533260eeb635e1a480dfe072621a85ad54d8dd194584ac620761ba7",
+    "environment.json": "c2fcad4fcd943f46122f248585d24ca37c6432687136121e6ae68a2c8784bd56",
+    "index.json": "8585f1a212576ce849bcd074f7878c1e3af30d50629db00b5e026c3e3d97bcf9",
+    "scores.json": "1f6176935c1de3cace72aec5c36d9485db2f845e6d3f6575e94ff2d1cb5ebea0",
+    "status.json": "48c88bd0faecd5e23c2703883ed93bba2960993ced527425669fabcc17769f5c"
+  }
+}

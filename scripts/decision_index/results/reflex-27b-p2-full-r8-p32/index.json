@@ -1,0 +1,422 @@
+{
+  "panel_id": "core25-observed-protocol-v1",
+  "index": 56.23,
+  "scores": {
+    "balanced_raw": 56.23,
+    "balanced_skill": 42.15,
+    "breadth_skill": 40.88
+  },
+  "areas": [
+    {
+      "id": "knowledge",
+      "label": "Knowledge & Reasoning",
+      "raw": 0.5558,
+      "skill": 0.3959,
+      "coverage": 0.8863,
+      "pending": 0.0,
+      "n": 6,
+      "benchmarks": [
+        24,
+        25,
+        30,
+        43,
+        44,
+        31
+      ]
+    },
+    {
+      "id": "language",
+      "label": "Language Understanding",
+      "raw": 0.626,
+      "skill": 0.4786,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "n": 3,
+      "benchmarks": [
+        11,
+        40,
+        41
+      ]
+    },
+    {
+      "id": "retrieval",
+      "label": "Retrieval & Classification",
+      "raw": 0.3613,
+      "skill": 0.2829,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "n": 2,
+      "benchmarks": [
+        36,
+        37
+      ]
+    },
+    {
+      "id": "tools",
+      "label": "Tools & Automation",
+      "raw": 0.7346,
+      "skill": 0.6206,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "n": 3,
+      "benchmarks": [
+        1,
+        2,
+        6
+      ]
+    },
+    {
+      "id": "arts",
+      "label": "Arts & Human Judgment",
+      "raw": 0.5337,
+      "skill": 0.3296,
+      "coverage": 0.8,
+      "pending": 0.0,
+      "n": 5,
+      "benchmarks": [
+        20,
+        21,
+        22,
+        23,
+        50
+      ]
+    }
+  ],
+  "benchmarks": {
+    "1": {
+      "raw": 0.9705,
+      "skill": 0.9602,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.2592,
+      "tracks": [],
+      "in_index": true
+    },
+    "2": {
+      "raw": 0.4346,
+      "skill": 0.3764,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.0933,
+      "tracks": [],
+      "in_index": true
+    },
+    "6": {
+      "raw": 0.7986,
+      "skill": 0.5252,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.5245,
+      "tracks": [
+        {
+          "track": "RouterBench-0shot",
+          "score": 0.7851,
+          "headline": false
+        },
+        {
+          "track": "RouterBench-5shot",
+          "score": 0.8121,
+          "headline": false
+        }
+      ],
+      "in_index": true
+    },
+    "7": {
+      "raw": 0.0,
+      "skill": 0.0,
+      "coverage": 0.0,
+      "pending": 1.0,
+      "random": null,
+      "tracks": [],
+      "in_index": false
+    },
+    "11": {
+      "raw": 0.7706,
+      "skill": 0.6682,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.3085,
+      "tracks": [],
+      "in_index": true
+    },
+    "13": {
+      "raw": 0.0,
+      "skill": 0.0,
+      "coverage": 0.0,
+      "pending": 1.0,
+      "random": null,
+      "tracks": [],
+      "in_index": false
+    },
+    "15": {
+      "raw": 0.0,
+      "skill": 0.0,
+      "coverage": 0.0,
+      "pending": 1.0,
+      "random": null,
+      "tracks": [],
+      "in_index": false
+    },
+    "16": {
+      "raw": 0.0,
+      "skill": 0.0,
+      "coverage": 0.0,
+      "pending": 1.0,
+      "random": null,
+      "tracks": [],
+      "in_index": false
+    },
+    "17": {
+      "raw": 0.0,
+      "skill": 0.0,
+      "coverage": 0.0,
+      "pending": 1.0,
+      "random": null,
+      "tracks": [],
+      "in_index": false
+    },
+    "19": {
+      "raw": 0.0,
+      "skill": 0.0,
+      "coverage": 0.0,
+      "pending": 1.0,
+      "random": null,
+      "tracks": [],
+      "in_index": false
+    },
+    "20": {
+      "raw": 0.9619,
+      "skill": 0.9238,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.5,
+      "tracks": [],
+      "in_index": true
+    },
+    "21": {
+      "raw": 0.6301,
+      "skill": 0.2603,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.5,
+      "tracks": [],
+      "in_index": true
+    },
+    "22": {
+      "raw": 0.0,
+      "skill": 0.0,
+      "coverage": 0.0,
+      "pending": 0.0,
+      "random": 0.0078,
+      "tracks": [],
+      "in_index": true
+    },
+    "23": {
+      "raw": 0.6438,
+      "skill": 0.2877,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.5,
+      "tracks": [],
+      "in_index": true
+    },
+    "24": {
+      "raw": 0.8263,
+      "skill": 0.7685,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.25,
+      "tracks": [],
+      "in_index": true
+    },
+    "25": {
+      "raw": 0.5153,
+      "skill": 0.3537,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.25,
+      "tracks": [],
+      "in_index": true
+    },
+    "30": {
+      "raw": 0.6535,
+      "skill": 0.5824,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.25,
+      "tracks": [
+        {
+          "track": "GSM8K-4choice",
+          "score": 0.7066,
+          "headline": false
+        },
+        {
+          "track": "GSM8K-10choice",
+          "score": 0.6005,
+          "headline": false
+        }
+      ],
+      "in_index": true
+    },
+    "31": {
+      "raw": 0.088,
+      "skill": 0.0067,
+      "coverage": 0.3176,
+      "pending": 0.0,
+      "random": 0.0819,
+      "tracks": [],
+      "in_index": true
+    },
+    "36": {
+      "raw": 0.1911,
+      "skill": 0.1535,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.0444,
+      "tracks": [],
+      "in_index": true
+    },
+    "37": {
+      "raw": 0.5315,
+      "skill": 0.4124,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.2027,
+      "tracks": [],
+      "in_index": true
+    },
+    "40": {
+      "raw": 0.5008,
+      "skill": 0.3578,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.2227,
+      "tracks": [
+        {
+          "track": "A · Arabic",
+          "score": 0.417,
+          "headline": false
+        },
+        {
+          "track": "A · English",
+          "score": 0.5008,
+          "headline": true
+        },
+        {
+          "track": "C · Arabic pairs",
+          "score": 0.77,
+          "headline": false
+        },
+        {
+          "track": "C · English pairs",
+          "score": 0.965,
+          "headline": false
+        }
+      ],
+      "in_index": true
+    },
+    "41": {
+      "raw": 0.6066,
+      "skill": 0.4099,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.3333,
+      "tracks": [],
+      "in_index": true
+    },
+    "43": {
+      "raw": 0.6123,
+      "skill": 0.3848,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.3697,
+      "tracks": [],
+      "in_index": true
+    },
+    "44": {
+      "raw": 0.6396,
+      "skill": 0.2792,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.5,
+      "tracks": [],
+      "in_index": true
+    },
+    "50": {
+      "raw": 0.4326,
+      "skill": 0.1765,
+      "coverage": 1.0,
+      "pending": 0.0,
+      "random": 0.311,
+      "tracks": [],
+      "in_index": true
+    }
+  },
+  "coverage": 0.9373,
+  "pending": 0.0,
+  "frozen_panel": {
+    "scores": {
+      "balanced_raw": 43.88,
+      "balanced_skill": 32.19,
+      "breadth_skill": 26.59
+    },
+    "categories": [
+      {
+        "id": "knowledge",
+        "raw": 0.6494,
+        "skill": 0.4737,
+        "coverage": 1.0,
+        "pending": 0.0
+      },
+      {
+        "id": "language",
+        "raw": 0.5526,
+        "skill": 0.4327,
+        "coverage": 1.0,
+        "pending": 0.0
+      },
+      {
+        "id": "tools",
+        "raw": 0.4407,
+        "skill": 0.3723,
+        "coverage": 0.6,
+        "pending": 0.4
+      },
+      {
+        "id": "games",
+        "raw": 0.0176,
+        "skill": 0.0013,
+        "coverage": 0.0635,
+        "pending": 0.8
+      },
+      {
+        "id": "arts",
+        "raw": 0.5337,
+        "skill": 0.3296,
+        "coverage": 0.8,
+        "pending": 0.0
+      }
+    ],
+    "coverage": 0.6927,
+    "pending": 0.24,
+    "note": "25-benchmark frozen panel with the six interactive benchmarks scored as zero (provisional lower bound); not the headline index."
+  },
+  "formulas": [
+    {
+      "id": "balanced_raw",
+      "normalization": "raw",
+      "formula": "100*sum_c(0.2*category[c])"
+    },
+    {
+      "id": "balanced_skill",
+      "normalization": "skill",
+      "formula": "100*sum_c(0.2*category[c])"
+    },
+    {
+      "id": "breadth_skill",
+      "normalization": "skill",
+      "shift": 0.1,
+      "formula": "100*(product_c((0.1+0.9*category[c])**0.2)-0.1)/0.9"
+    }
+  ]
+}
