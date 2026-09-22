@@ -229,6 +229,14 @@ def main(argv=None):
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8008)
     ap.add_argument("--max-pack-tokens", type=int, default=8192)
+    ap.add_argument(
+        "--max-branch-tokens",
+        type=int,
+        default=4096,
+        help="longest single question (instructions plus options) the server will read, "
+        "in tokens. Anything longer is refused rather than cut. Raise it for suites that "
+        "put a whole document in one question; the ceiling is the model's context window",
+    )
     ap.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float16", "float32"])
     ap.add_argument("--device", default="cuda", choices=["cuda", "mps", "cpu"])
     args = ap.parse_args(argv)
@@ -280,6 +288,7 @@ def main(argv=None):
         dtype=getattr(torch, args.dtype),
         device=args.device,
         max_pack_tokens=args.max_pack_tokens,
+        max_branch_tokens=args.max_branch_tokens,
         ensemble=args.ensemble,
         **kw,
     )
