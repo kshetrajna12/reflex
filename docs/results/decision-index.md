@@ -1,7 +1,9 @@
 # Decision Index: full Reflex 27B run (2026-09-22)
 
 The full [Decision Index](https://huggingface.co/spaces/multimodalart/jev-decision-index)
-run is complete. Reflex 27B scores **56.23**, above the kit's Jev reference at **55.74**.
+run is complete. Reflex 27B scores **56.23**, above Jevfire, the kit's reference run, at
+**55.74**, and behind Jev itself, which the leaderboard lists at **59.51**. On the live
+leaderboard 56.23 is first among the open reproductions.
 All 132,422 frozen requests were accounted for, with 117,922 successful responses, 14,500
 declared capacity refusals and no errors.
 
@@ -13,13 +15,13 @@ The reproduction kit is `apolinario/decision-index` at
 
 ## Headline result
 
-| metric | Reflex 27B | Jev reference | delta |
+| metric | Reflex 27B | Jevfire (kit reference) | delta |
 |---|---:|---:|---:|
 | **Decision Index** | **56.23** | 55.74 | **+0.49** |
 | balanced skill | **42.15** | 40.86 | **+1.29** |
 | breadth skill | **40.88** | 39.45 | **+1.43** |
 
-The Jev figures are the reproduction kit's own `jevfire-uncapped` reference; scoring that
+The Jevfire figures are the reproduction kit's own `jevfire-uncapped` reference; scoring that
 run locally reproduces its published 55.74 / 40.86 / 39.45 entry. The comparison therefore
 uses the same suite, exclusions, metrics and formulas.
 
