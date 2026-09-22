@@ -513,7 +513,10 @@ class Engine:
         cur, n, longest = [], 0, 0
         for b in branch_ids:
             if len(b) > self.max_branch_tokens:
-                raise ValueError(f"question branch too long: {len(b)} > {self.max_branch_tokens}")
+                raise ValueError(
+                    f"question branch of {len(b)} tokens is over the maximum context "
+                    f"length of {self.max_branch_tokens} tokens for one question"
+                )
             new_longest = max(longest, len(b))
             size = n + len(b) if self.strategy == "packed" else (len(cur) + 1) * new_longest
             if cur and size > self.max_pack_tokens:

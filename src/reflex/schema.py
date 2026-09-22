@@ -47,9 +47,9 @@ class ChoiceQuestion(BaseModel):
     @classmethod
     def _check_options(cls, v: dict[str, Text | None]) -> dict[str, Text | None]:
         if len(v) < 2:
-            raise ValueError("choice needs at least 2 options")
+            raise ValueError("a choice needs at least two options")
         if len(v) > MAX_CHOICE_OPTIONS:
-            raise ValueError(f"choice supports at most {MAX_CHOICE_OPTIONS} options")
+            raise ValueError(f"at most {MAX_CHOICE_OPTIONS} options per choice")
         for k in v:
             if not k or not k.strip():
                 raise ValueError("option keys must be non-empty")
@@ -66,9 +66,7 @@ class ScoreQuestion(BaseModel):
     @classmethod
     def _check_levels(cls, v: list[Text]) -> list[Text]:
         if not (MIN_SCORE_LEVELS <= len(v) <= MAX_SCORE_LEVELS):
-            raise ValueError(
-                f"score needs between {MIN_SCORE_LEVELS} and {MAX_SCORE_LEVELS} levels"
-            )
+            raise ValueError(f"a score takes {MIN_SCORE_LEVELS} to {MAX_SCORE_LEVELS} levels")
         return v
 
 
