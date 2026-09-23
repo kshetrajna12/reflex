@@ -201,10 +201,12 @@ run SGLang and for the 27B, where it is the better way to serve.
 
 ### On a Mac (Apple Silicon)
 
-The server also runs on the Mac GPU through PyTorch MPS. Install without the CUDA wheel index,
-then pick the device:
+The five-minute quick start above checks out `stable`, which predates the server's `--device`
+option. For MPS serving, switch to `main`, install without the CUDA wheel index, then pick the
+device:
 
 ```bash
+git checkout main
 uv sync --no-sources                      # plain PyPI torch, which includes MPS
 uv run --no-sync reflex-serve --model Qwen/Qwen3.5-2B --device mps --dtype float16
 ```

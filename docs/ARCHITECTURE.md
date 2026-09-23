@@ -184,6 +184,10 @@ An escalation cascade in front of it was built, measured and removed
 Hardware: any CUDA GPU, or an Apple Silicon GPU with `--device mps`. Qwen3.5-4B in bf16
 needs ~9 GB; Qwen3.5-0.8B / Qwen3-0.6B run anywhere.
 
+For MPS, use `main`: the current `stable` tag predates the server's `--device` option. The
+[Apple Silicon setup in the README](../README.md#on-a-mac-apple-silicon) also installs the
+PyTorch build that includes MPS support.
+
 ```bash
 uv sync --extra dev
 uv run pytest tests                       # mask unit tests + GPU equivalence tests (small models)
