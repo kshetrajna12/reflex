@@ -200,9 +200,15 @@ credentials for the same reason. The result:
 | benchmarks | 36 | 37 |
 | `selected-rows.jsonl` SHA-256 | `3eb7aa1e…` | `288d3720…` |
 
-The entire 513-request deficit is HLE. **For the five benchmarks measured here the
-selection is provably the office one**, because `freeze` chooses rows by a SHA-256
-priority over a fixed seed, per benchmark, so an absent benchmark cannot perturb another.
+The entire 513-request deficit is HLE, which is the only one of the 37 benchmarks to fail,
+in both acquisition and normalisation. The suite was built twice, independently: once by
+the tolerant per-benchmark driver that records a bad source instead of raising, and once
+by calling the five normalizers and `freeze` directly. Both produced `selected-rows.jsonl`
+with the same SHA-256, `3eb7aa1e…`, which is worth more than either build alone.
+
+**For the five benchmarks measured here the selection is provably the office one**,
+because `freeze` chooses rows by a SHA-256 priority over a fixed seed, per benchmark, so
+an absent benchmark cannot perturb another.
 The row counts come out exactly as the 27B run records them — API-Bank 508, BANKING77
 3080, CLINC150+OOS 5500, POP909-CL 2000, ChessBench 5000 — and ChessBench is the
 independent check: 1588 of its 5000 rows fit in a single page, and the 27B run reports
@@ -227,7 +233,12 @@ VIRTUAL_ENV=~/src/github.com/reflex-lc/.venv uv pip install --no-deps causal-con
 REFLEX_API_KEY=di uv run reflex-serve --stable --served-name reflex \
   --host 127.0.0.1 --port 8021 --require-fast-kernels --max-pack-tokens 65536
 
-# the frozen rows: normalize the five benchmarks, then freeze
+# the frozen rows. The whole suite, with a bad source recorded rather than raised, since
+# the stock `suite rebuild` aborts on the first one and HLE is gated:
+python rebuild_driver.py ~/scratch/di/work      # writes rebuild-report.json with the hashes
+
+# or, for these five benchmarks only, the normalizers and freeze called directly —
+# same selected-rows.jsonl, same SHA-256:
 python -c 'from decision_index.suite.build import rebuild; from decision_index.suite.build.layout import Layout; from pathlib import Path; l=Layout(Path.home()/"scratch/di/work"); [rebuild.BUILDERS[n](l) for n in (3,4,5,22,31)]'
 python -c 'from decision_index.suite.build import freeze; from decision_index.suite.build.layout import Layout; from pathlib import Path; l=Layout(Path.home()/"scratch/di/work"); print(freeze.freeze(l, l.suite/"release-v1-rebuilt", log=lambda *a: None)["selected_rows_sha256"])'
 
