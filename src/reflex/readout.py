@@ -94,9 +94,14 @@ def to_answer(kind: str, key_probs: dict[Any, float], q=None):
     if kind == "noul":
         return NoulAnswer(noul=round(key_probs[True], 6))
 
+    probs = {str(key): float(value) for key, value in key_probs.items()}
+    if not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in probs.values()):
+        raise ValueError("answer probabilities must be finite values in 0..1")
+    if not math.isclose(sum(probs.values()), 1.0, rel_tol=1e-9, abs_tol=1e-9):
+        raise ValueError("answer probabilities must sum to 1")
+
     if kind == "choice":
-        probs = {str(k): round(v, 6) for k, v in key_probs.items()}
-        best = max(probs, key=probs.get)
+        best = str(max(key_probs, key=key_probs.get))
         return ChoiceAnswer(
             choice=best,
             probabilities=probs,
@@ -112,6 +117,6 @@ def to_answer(kind: str, key_probs: dict[Any, float], q=None):
     return ScoreAnswer(
         score=round(score, 6),
         legend={str(i): render_text(q.criteria[i]) for i in levels},
-        probabilities={str(i): round(float(key_probs[i]), 6) for i in levels},
+        probabilities={str(i): probs[str(i)] for i in levels},
         confidence=round(confidence(p), 6),
     )

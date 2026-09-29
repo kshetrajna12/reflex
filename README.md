@@ -381,7 +381,10 @@ in [docs/VISION.md](docs/VISION.md).
 - The browser demo runs all questions of a request in one batched forward pass, but
   re-reads the state for every question and does not cache it between requests, so it
   is fine for a handful of questions, not hundreds.
-- A `choice` question can have up to 26 options; `score` can have 2 to 10 levels.
+- The Qwen and SGLang readouts accept up to 26 options per `choice` question.
+  The experimental [DiffusionGemma backend](docs/DIFFUSION.md) can accept up to 255
+  when its tokenizer and the upstream selected-token limit support them. `score`
+  accepts 2 to 10 levels.
 - `--device mps` runs the server on an Apple Silicon GPU, `--backend sglang` on an SGLang
   server; `--permutations N` sets how many option orders each question is read in.
 - The model is not magic: check its answers on a handful of your own examples before

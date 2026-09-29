@@ -200,6 +200,8 @@ def build_branches(
     not depend on which other questions are in the request. Yes/no questions get the
     swapped order as their second branch."""
     rng = rng or random.Random(f"{seed}:{qid}")
+    if isinstance(q, ChoiceQuestion) and len(q.criteria) > len(LETTERS):
+        raise ValueError(f"this prompt supports at most {len(LETTERS)} options per choice")
     if fmt.style == "compact":
         return _build_compact(qid, q, fmt, permutations, rng)
 

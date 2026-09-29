@@ -15,11 +15,11 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# `instructions` and criteria descriptions may be a string, or structured JSON that we
-# render for the model (e.g. {"what": ..., "examples": [...]}).
+# TypeSafe's EntryType permits a string, structured JSON, or null for instructions
+# and criteria descriptions (e.g. {"what": ..., "examples": [...]}).
 Text = str | dict[str, Any] | list[Any]
 
-MAX_CHOICE_OPTIONS = 26  # single-letter readout; see README "Limits"
+MAX_CHOICE_OPTIONS = 255
 MIN_SCORE_LEVELS = 2
 MAX_SCORE_LEVELS = 10
 
@@ -33,14 +33,14 @@ class NoulCriteria(BaseModel):
 class NoulQuestion(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["noul"]
-    instructions: Text
+    instructions: Text | None
     criteria: NoulCriteria | None = None
 
 
 class ChoiceQuestion(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["choice"]
-    instructions: Text
+    instructions: Text | None
     criteria: dict[str, Text | None]
 
     @field_validator("criteria")
@@ -59,12 +59,12 @@ class ChoiceQuestion(BaseModel):
 class ScoreQuestion(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["score"]
-    instructions: Text
-    criteria: list[Text]  # ordered low -> high
+    instructions: Text | None
+    criteria: list[Text | None]  # ordered low -> high
 
     @field_validator("criteria")
     @classmethod
-    def _check_levels(cls, v: list[Text]) -> list[Text]:
+    def _check_levels(cls, v: list[Text | None]) -> list[Text | None]:
         if not (MIN_SCORE_LEVELS <= len(v) <= MAX_SCORE_LEVELS):
             raise ValueError(f"a score takes {MIN_SCORE_LEVELS} to {MAX_SCORE_LEVELS} levels")
         return v

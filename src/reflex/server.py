@@ -159,6 +159,54 @@ def _sglang_backend(args):
     return backend
 
 
+def _diffusion_backend(args):
+    from transformers import AutoTokenizer
+
+    from reflex.backends.diffusion import MODEL_ID, DiffusionBackend
+
+    for flag, value in (
+        ("--adapter", args.adapter),
+        ("--ensemble", args.ensemble),
+        ("--calibration", args.calibration),
+        ("--prompt-texts", args.prompt_texts),
+        ("--stable", args.stable),
+        ("--require-fast-kernels", args.require_fast_kernels),
+    ):
+        if value:
+            raise SystemExit(f"{flag} is not supported by the experimental diffusion backend")
+    if args.model != MODEL_ID or args.device != "cuda" or args.prompt_style != "markdown":
+        raise SystemExit(
+            f"--backend diffusion requires --model {MODEL_ID}; local device and Qwen "
+            "prompt overrides do not apply"
+        )
+    tok = AutoTokenizer.from_pretrained(args.model, revision=args.diffusion_tokenizer_revision)
+    backend = DiffusionBackend(
+        args.diffusion_url,
+        tokenizer=tok,
+        upstream_model=args.diffusion_upstream_model,
+        model_name=args.served_name or "reflex-diffusion-experimental",
+        mode=args.diffusion_mode,
+        steps=args.diffusion_steps,
+        samples=args.diffusion_samples,
+        default_permutations=args.permutations,
+        canvas_length=args.diffusion_canvas,
+        max_context=args.max_pack_tokens,
+        max_concurrent_calls=args.diffusion_concurrency,
+        max_concurrent_requests=args.diffusion_request_concurrency,
+        seed=args.diffusion_seed,
+        constrained=args.diffusion_constrained,
+        compact_canvas=args.diffusion_compact_canvas,
+        fuse_permutations=args.diffusion_fuse_permutations,
+        alphabet_readout=args.diffusion_alphabet_readout,
+        group_admission=args.diffusion_group_admission,
+        split_overflow=args.diffusion_split_overflow,
+        max_selected_label_ids=args.diffusion_max_selected_label_ids,
+        prompt_layout=args.diffusion_prompt_layout,
+    )
+    log.warning("experimental %s backend; label probabilities are uncalibrated", backend.strategy)
+    return backend
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3.5-4B")
@@ -208,9 +256,9 @@ def main(argv=None):
     ap.add_argument(
         "--backend",
         default="transformers",
-        choices=["transformers", "sglang"],
-        help="transformers: load the model in this process (the default). sglang: read the "
-        "same label logits off an SGLang server over HTTP (reflex.backends.sglang)",
+        choices=["transformers", "sglang", "diffusion"],
+        help="transformers: load the model here (default); sglang: read Qwen label logits "
+        "over HTTP; diffusion: experimental DiffusionGemma structured reads over HTTP",
     )
     ap.add_argument(
         "--sglang-concurrency",
@@ -225,6 +273,67 @@ def main(argv=None):
         "--sglang-url",
         default="http://127.0.0.1:30000",
         help="where the SGLang server listens, for --backend sglang",
+    )
+    from reflex.backends.diffusion import MODEL_REVISION
+
+    ap.add_argument("--diffusion-url", default="http://127.0.0.1:8000")
+    ap.add_argument("--diffusion-upstream-model", default="dgemma")
+    ap.add_argument("--diffusion-tokenizer-revision", default=MODEL_REVISION)
+    ap.add_argument(
+        "--diffusion-mode",
+        choices=["isolated", "joint"],
+        default="isolated",
+        help="joint shares a canvas: questions can influence one another",
+    )
+    ap.add_argument("--diffusion-steps", type=int, default=1)
+    ap.add_argument(
+        "--diffusion-samples",
+        type=int,
+        default=1,
+        help="fixed noise samples per option order; no adaptive extra reads",
+    )
+    ap.add_argument("--diffusion-canvas", type=int, default=64)
+    ap.add_argument(
+        "--diffusion-prompt-layout",
+        choices=["system_questions_first", "user_state_first"],
+        default="system_questions_first",
+        help="place the state before the question schema in one user message when selected",
+    )
+    ap.add_argument("--diffusion-concurrency", type=int, default=8)
+    ap.add_argument(
+        "--diffusion-request-concurrency",
+        type=int,
+        default=8,
+        help="maximum complete diffusion requests admitted at once",
+    )
+    ap.add_argument("--diffusion-seed", type=int, default=0)
+    ap.add_argument(
+        "--diffusion-constrained",
+        action="store_true",
+        help="experimental label-only readout; requires compatible vLLM support and one step",
+    )
+    ap.add_argument("--diffusion-compact-canvas", action="store_true")
+    ap.add_argument(
+        "--diffusion-fuse-permutations",
+        action="store_true",
+        help="experimental joint read of all option orders; changes cross-slot conditioning",
+    )
+    ap.add_argument("--diffusion-alphabet-readout", action="store_true")
+    ap.add_argument(
+        "--diffusion-group-admission",
+        action="store_true",
+        help="admit two independent option orders together; requires the opt-in engine extension",
+    )
+    ap.add_argument(
+        "--diffusion-split-overflow",
+        action="store_true",
+        help="split joint reads that exceed the served canvas, context, or selected-ID budget",
+    )
+    ap.add_argument(
+        "--diffusion-max-selected-label-ids",
+        type=int,
+        default=128,
+        help="client limit for requested label IDs; must match vLLM's --max-logprobs",
     )
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8008)
@@ -244,8 +353,18 @@ def main(argv=None):
 
     import uvicorn
 
-    from reflex.engine import Engine
-    from reflex.kernels import describe, kernel_report, require_fast_kernels
+    if args.backend == "diffusion":
+        engine = _diffusion_backend(args)
+        try:
+            uvicorn.run(
+                create_app(engine, api_key=args.api_key),
+                host=args.host,
+                port=args.port,
+                log_level="warning",
+            )
+        finally:
+            engine.close()
+        return
 
     if args.backend == "sglang":
         if args.require_fast_kernels:
@@ -261,6 +380,9 @@ def main(argv=None):
             log_level="warning",
         )
         return
+
+    from reflex.engine import Engine
+    from reflex.kernels import describe, kernel_report, require_fast_kernels
 
     if args.stable:
         from reflex.serving import engine_kwargs, load_stable
